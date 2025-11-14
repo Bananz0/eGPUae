@@ -25,6 +25,8 @@ This tool runs silently in the background and:
 - Detects when you safe-remove your eGPU
 - Waits for you to unplug and replug it
 - **Automatically enables it** when reconnected!
+- Shows **Windows notifications** for important events
+- Checks for updates daily and notifies you
 - Logs all activity with automatic rotation (max 500 KB)
 
 ---
@@ -114,6 +116,15 @@ irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.p
 # Choose option [1] Reconfigure
 ```
 
+### View Logs
+```powershell
+# View last 50 log entries
+Get-Content "$env:USERPROFILE\.egpu-manager\egpu-manager.log" -Tail 50
+
+# Open log folder
+explorer "$env:USERPROFILE\.egpu-manager"
+```
+
 ### Uninstall
 ```powershell
 # Download and run with -Uninstall flag
@@ -133,8 +144,10 @@ Or if you have the file locally:
 ### Files Created:
 ```
 C:\Users\YourName\.egpu-manager\
-├── eGPU.ps1              # Monitor script
-└── egpu-config.json      # Your eGPU configuration
+├── eGPU.ps1                  # Monitor script
+├── egpu-config.json          # Your eGPU configuration
+├── egpu-manager.log          # Activity log (auto-rotates at 500 KB)
+└── egpu-manager.old.log      # Previous log backup
 ```
 
 ### Scheduled Task:
@@ -171,7 +184,27 @@ C:\Users\YourName\.egpu-manager\
 ### Q: Does it work with laptops?
 **A:** Yes, as long as you have Thunderbolt or USB-C with eGPU support.
 
-### Q: What if I have multiple eGPUs?
+### Q: Does it log activity?
+**A:** Yes! All state changes and actions are logged to `egpu-manager.log`. The log automatically rotates when it reaches 500 KB, keeping only the last 1000 lines to prevent it from growing indefinitely.
+
+### Q: Where can I find the logs?
+**A:** 
+```powershell
+# View logs
+Get-Content "$env:USERPROFILE\.egpu-manager\egpu-manager.log" -Tail 50
+
+# Open folder
+explorer "$env:USERPROFILE\.egpu-manager"
+```
+
+### Q: How do I update to a new version?
+**A:** The script checks for updates automatically once per day and will notify you if a new version is available. To update, simply run the installer again:
+```powershell
+irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex
+```
+Your configuration will be preserved.
+
+### Q: Can I disable update checks?
 **A:** Currently supports one eGPU. For multiple eGPUs, you can modify the config or run multiple instances with different configs.
 
 ### Q: Does it slow down my system?
