@@ -1,4 +1,4 @@
-# eGPU Auto-Enable 🚀
+# eGPU Auto-Enabler
 
 **Automatically re-enable your eGPU after hot-plugging on Windows**
 
@@ -16,7 +16,7 @@ Never manually enable your eGPU from Device Manager again! This tool monitors yo
 When using an external GPU (eGPU) via Thunderbolt/USB-C on Windows:
 1. You "safely remove" it using NVIDIA Control Panel (or Device Manager)
 2. You physically disconnect the eGPU
-3. When you plug it back in... **it stays disabled** 😤
+3. When you plug it back in... **it stays disabled**
 4. You have to manually open Device Manager and enable it every time
 
 ## Solution
