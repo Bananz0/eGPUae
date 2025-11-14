@@ -2,6 +2,9 @@
 # This script continuously monitors for eGPU physical reconnection and automatically enables it
 # Designed to run at startup and handle all eGPU hot-plug scenarios
 
+# VERSION CONSTANT - Update this when releasing new versions
+$SCRIPT_VERSION = "2.0.0"
+
 <#
 .SYNOPSIS
     eGPU Auto-Enable Tool - Automatically re-enables eGPU after hot-plugging on Windows
@@ -580,13 +583,28 @@ function Show-Notification {
         $notify.BalloonTipTitle = $Title
         $notify.BalloonTipText = $Message
         $notify.Visible = $true
+        
+        # Register event to clean up after balloon is shown
+        $cleanup = Register-ObjectEvent -InputObject $notify -EventName BalloonTipClosed -Action {
+            try {
+                $Event.MessageData.Visible = $false
+                $Event.MessageData.Dispose()
+            } catch {}
+            Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
+            Remove-Job -Id $EventSubscriber.Action.Id -Force
+        } -MessageData $notify
+        
+        # Also set a timeout cleanup in case event doesn't fire
+        $timeout = Register-ObjectEvent -InputObject ([System.Timers.Timer]@{Interval=6000;AutoReset=$false;Enabled=$true}) -EventName Elapsed -Action {
+            try {
+                $Event.MessageData.Visible = $false
+                $Event.MessageData.Dispose()
+            } catch {}
+            Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
+            Remove-Job -Id $EventSubscriber.Action.Id -Force
+        } -MessageData $notify
+        
         $notify.ShowBalloonTip(5000)
-
-        Start-Job -ScriptBlock {
-            param($ni)
-            Start-Sleep -Seconds 6
-            try { $ni.Visible = $false; $ni.Dispose() } catch {}
-        } -ArgumentList $notify | Out-Null
 
         Write-Log "Notification shown (tray): $Title" "INFO"
     } catch {
@@ -627,7 +645,7 @@ function Check-ForUpdate {
     Get-Date | Set-Content $lastUpdateCheckFile -ErrorAction SilentlyContinue
     
     try {
-        $currentVersion = if ($config.InstalledVersion) { $config.InstalledVersion } else { "1.0.0" }
+        $currentVersion = $SCRIPT_VERSION
         $updateUrl = "https://api.github.com/repos/Bananz0/eGPUae/releases/latest"
         
         $releaseInfo = Invoke-RestMethod -Uri $updateUrl -ErrorAction Stop -TimeoutSec 5
@@ -814,7 +832,7 @@ Write-Host "Press Ctrl+C to stop.`n" -ForegroundColor Gray
 Write-Log "=== eGPU Manager Started ===" "INFO"
 Write-Log "eGPU Name: $egpu_name" "INFO"
 Write-Log "Poll Interval: $pollInterval seconds" "INFO"
-Write-Log "Version: $($config.InstalledVersion)" "INFO"
+Write-Log "Version: $SCRIPT_VERSION" "INFO"
 
 # Get initial state
 $script:lastKnownState = Get-eGPUState -egpu_name $egpu_name
@@ -826,9 +844,6 @@ Restore-PreviousState -currentEGPUState $script:lastKnownState
 Check-ForUpdate -config $config
 
 # Report initial state
-# Report initial state
-$startupTime = Get-Date -Format 'HH:mm:ss'
-
 switch ($script:lastKnownState) {
     "present-ok" {
         Write-Log "STARTUP: eGPU connected and enabled" "SUCCESS"

@@ -1,6 +1,9 @@
 # eGPU Auto-Enable Installer/Uninstaller
 # Interactive setup for automatic eGPU re-enabling at startup
 
+# VERSION CONSTANT - Update this when releasing new versions
+$SCRIPT_VERSION = "2.0.0"
+
 <#
 .SYNOPSIS
     eGPU Auto-Enable Tool - Automatically re-enables eGPU after hot-plugging on Windows
@@ -28,7 +31,7 @@
     File Name      : Install-eGPU-Startup.ps1
     Prerequisite   : PowerShell 7.0 or later
     Requires Admin : Yes
-    Version        : 1.0.0
+    Version        : 2.0.0
     Repository     : https://github.com/Bananz0/eGPUae
 #>
 
@@ -144,17 +147,144 @@ $alreadyInstalled = (Test-Path $installPath) -or (Get-ScheduledTask -TaskName $t
 
 if ($alreadyInstalled) {
     Write-Host "⚠ eGPU Auto-Enable is already installed!" -ForegroundColor Yellow
+    
+    # Check current version
+    $currentVersion = "Unknown"
+    if (Test-Path $configPath) {
+        try {
+            $config = Get-Content $configPath | ConvertFrom-Json
+            $currentVersion = if ($config.InstalledVersion) { $config.InstalledVersion } else { "1.0.0" }
+        } catch {}
+    }
+    Write-Host "Current version: $currentVersion" -ForegroundColor Gray
+    Write-Host "Installer version: $SCRIPT_VERSION" -ForegroundColor Gray
+    
     Write-Host "`nWhat would you like to do?" -ForegroundColor Cyan
-    Write-Host "  [1] Reconfigure (select different eGPU)" -ForegroundColor Gray
-    Write-Host "  [2] Reinstall (fresh installation)" -ForegroundColor Gray
-    Write-Host "  [3] Uninstall" -ForegroundColor Gray
-    Write-Host "  [4] Cancel" -ForegroundColor Gray
+    Write-Host "  [1] Update (download and install latest version)" -ForegroundColor Gray
+    Write-Host "  [2] Reconfigure (change settings/eGPU)" -ForegroundColor Gray
+    Write-Host "  [3] Reinstall (fresh installation)" -ForegroundColor Gray
+    Write-Host "  [4] Uninstall" -ForegroundColor Gray
+    Write-Host "  [5] Cancel" -ForegroundColor Gray
     Write-Host ""
     
-    $choice = Read-Host "Enter choice [1-4]"
+    $choice = Read-Host "Enter choice [1-5]"
     
     switch ($choice) {
+        "1" {
+            # Update - download latest from GitHub
+            Write-Host "`nChecking for updates..." -ForegroundColor Cyan
+            
+            try {
+                $updateUrl = "https://api.github.com/repos/Bananz0/eGPUae/releases/latest"
+                $releaseInfo = Invoke-RestMethod -Uri $updateUrl -ErrorAction Stop
+                $latestVersion = $releaseInfo.tag_name.TrimStart("v")
+                
+                Write-Host "Latest version: $latestVersion" -ForegroundColor Green
+                
+                if ($latestVersion -eq $currentVersion) {
+                    Write-Host "`n✓ You already have the latest version installed!" -ForegroundColor Green
+                    pause
+                    exit
+                }
+                
+                Write-Host "`nDownloading latest version..." -ForegroundColor Yellow
+                
+                # Download eGPU.ps1
+                $eGPUUrl = "https://raw.githubusercontent.com/Bananz0/eGPUae/main/eGPU.ps1"
+                $installerUrl = "https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1"
+                
+                $tempPath = Join-Path $env:TEMP "egpu-update"
+                if (-not (Test-Path $tempPath)) {
+                    New-Item -ItemType Directory -Path $tempPath -Force | Out-Null
+                }
+                
+                $tempEGPU = Join-Path $tempPath "eGPU.ps1"
+                $tempInstaller = Join-Path $tempPath "Install-eGPU-Startup.ps1"
+                
+                Write-Host "  Downloading eGPU.ps1..." -ForegroundColor Gray
+                Invoke-WebRequest -Uri $eGPUUrl -OutFile $tempEGPU -ErrorAction Stop
+                
+                Write-Host "  Downloading Install-eGPU-Startup.ps1..." -ForegroundColor Gray
+                Invoke-WebRequest -Uri $installerUrl -OutFile $tempInstaller -ErrorAction Stop
+                
+                # Stop running monitor
+                $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.CommandLine -like "*eGPU.ps1*"}
+                if ($runningProcesses) {
+                    Write-Host "  Stopping running monitor..." -ForegroundColor Gray
+                    $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 2
+                }
+                
+                # Backup current config
+                if (Test-Path $configPath) {
+                    $backupConfig = Get-Content $configPath | ConvertFrom-Json
+                }
+                
+                # Copy new files
+                Write-Host "  Installing updated files..." -ForegroundColor Gray
+                Copy-Item $tempEGPU -Destination $monitorScriptPath -Force
+                
+                # Update config with new version
+                if ($backupConfig) {
+                    $backupConfig.InstalledVersion = $latestVersion
+                    $backupConfig | ConvertTo-Json | Set-Content $configPath
+                }
+                
+                # Restart the scheduled task
+                $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if ($task) {
+                    Write-Host "  Restarting monitor..." -ForegroundColor Gray
+                    Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                }
+                
+                # Cleanup
+                Remove-Item $tempPath -Recurse -Force -ErrorAction SilentlyContinue
+                
+                Write-Host "`n✓ Successfully updated to version $latestVersion!" -ForegroundColor Green
+                Write-Host "The eGPU monitor is now running with the latest version." -ForegroundColor Gray
+                
+            } catch {
+                Write-Host "`n✗ Update failed: $_" -ForegroundColor Red
+                Write-Host "You can manually download from: https://github.com/Bananz0/eGPUae" -ForegroundColor Yellow
+            }
+            
+            pause
+            exit
+        }
+        "2" {
+            # Reconfigure - keep this simple, just continue with install
+            Write-Host "`nReconfiguring..." -ForegroundColor Yellow
+            Write-Host "Keeping your installation folder and proceeding to configuration.`n" -ForegroundColor Gray
+            # Continue to main install flow
+        }
         "3" {
+            # Reinstall
+            Write-Host "`nReinstalling..." -ForegroundColor Yellow
+            
+            # Stop processes
+            $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.CommandLine -like "*eGPU.ps1*"}
+            if ($runningProcesses) {
+                Write-Host "  Stopping running processes..." -ForegroundColor Gray
+                $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+            
+            # Remove task
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existingTask) {
+                Write-Host "  Removing scheduled task..." -ForegroundColor Gray
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+            }
+            
+            # Remove folder
+            if (Test-Path $installPath) {
+                Write-Host "  Removing old installation..." -ForegroundColor Gray
+                Remove-Item $installPath -Recurse -Force
+            }
+            
+            Write-Host "  Starting fresh installation...`n" -ForegroundColor Gray
+            # Continue to main install flow
+        }
+        "4" {
             # Run uninstall inline
             Write-Host "`nUninstalling..." -ForegroundColor Yellow
             
@@ -199,35 +329,10 @@ if ($alreadyInstalled) {
             pause
             exit
         }
-        "4" {
+        default {
             Write-Host "`nCancelled." -ForegroundColor Yellow
             pause
             exit
-        }
-        "2" {
-            Write-Host "`nReinstalling..." -ForegroundColor Yellow
-            
-            # Remove existing task
-            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-            if ($existingTask) {
-                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-            }
-            
-            # Remove existing files
-            if (Test-Path $installPath) {
-                Remove-Item -Path $installPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            
-            Write-Host "✓ Existing installation removed" -ForegroundColor Green
-            Write-Host "`nStarting fresh installation..." -ForegroundColor Green
-            Start-Sleep -Seconds 2
-            Clear-Host
-            Write-Host "========================================" -ForegroundColor Cyan
-            Write-Host "  eGPU Auto-Enable INSTALLER" -ForegroundColor Cyan
-            Write-Host "========================================`n" -ForegroundColor Cyan
-        }
-        default {
-            Write-Host "`nReconfiguring..." -ForegroundColor Green
         }
     }
 }
@@ -451,7 +556,7 @@ $config = @{
     eGPU_Name = $selectedGPU.FriendlyName
     eGPU_InstanceID = $selectedGPU.InstanceId
     ConfiguredDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    InstalledVersion = "1.0.0"
+    InstalledVersion = $SCRIPT_VERSION
     AutoUpdateCheck = $true
 }
 

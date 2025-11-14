@@ -15,11 +15,37 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Get version from tag
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      
+      - name: Update version in scripts
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          
+          # Update eGPU.ps1
+          sed -i "s/^\$SCRIPT_VERSION = \".*\"/\$SCRIPT_VERSION = \"$VERSION\"/" eGPU.ps1
+          sed -i "s/^    Version        : .*/    Version        : $VERSION/" eGPU.ps1
+          
+          # Update Install-eGPU-Startup.ps1
+          sed -i "s/^\$SCRIPT_VERSION = \".*\"/\$SCRIPT_VERSION = \"$VERSION\"/" Install-eGPU-Startup.ps1
+          sed -i "s/^    Version        : .*/    Version        : $VERSION/" Install-eGPU-Startup.ps1
+          
+          echo "Updated version to $VERSION in both scripts"
+      
+      - name: Commit version updates
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add eGPU.ps1 Install-eGPU-Startup.ps1
+          git diff-index --quiet HEAD || git commit -m "chore: bump version to ${{ steps.get_version.outputs.VERSION }}"
+          git push origin HEAD:main
       
       - name: Get previous tag
         id: get_previous_tag
@@ -42,10 +68,10 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.get_version.outputs.VERSION }}
-          name: ${{ steps.get_version.outputs.VERSION }}
+          tag_name: ${{ steps.get_version.outputs.TAG }}
+          name: ${{ steps.get_version.outputs.TAG }}
           body: |
-            ## eGPU Auto-Enable ${{ steps.get_version.outputs.VERSION }}
+            ## eGPU Auto-Enable ${{ steps.get_version.outputs.TAG }}
             
             ### Installation
             ```powershell
@@ -61,7 +87,7 @@ jobs:
             - PowerShell 7.0+
             - Administrator privileges
             
-            **Full Changelog**: https://github.com/Bananz0/eGPUae/compare/${{ steps.get_previous_tag.outputs.PREVIOUS_TAG }}...${{ steps.get_version.outputs.VERSION }}
+            **Full Changelog**: https://github.com/Bananz0/eGPUae/compare/${{ steps.get_previous_tag.outputs.PREVIOUS_TAG }}...${{ steps.get_version.outputs.TAG }}
           draft: false
           prerelease: false
           generate_release_notes: true
