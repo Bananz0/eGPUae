@@ -5,6 +5,43 @@ All notable changes to eGPU Auto-Enable will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2025-11-14
+
+### Added
+- **Custom eGPU High Performance power plan** - Automatically created during install with maximum performance settings (CPU 100%, PCIe max power, USB no suspend)
+- **Automatic power plan switching** - Switches to eGPU plan when connected, restores original when disconnected
+- **Laptop lid close action management** - Sets to "Do Nothing" when eGPU connected, restores user preference when disconnected
+- **User power preference configuration** during installation:
+  - Display timeout duration (minutes or system default)
+  - Lid close action preference (Do Nothing/Sleep/Hibernate/Shut Down)
+- **Crash recovery system** - Automatically restores settings if script terminates unexpectedly
+- **Runtime state persistence** (runtime-state.json) - Saves original power settings for recovery
+- **Smart restore logic** - Distinguishes between reboots and crashes to prevent false restorations
+- **CIM-based lid close management** - More reliable than powercfg, works across all Windows configurations
+- Notifications for all power management events
+
+### Changed
+- **BREAKING:** Installer now requires user input for power management preferences
+- Enhanced installer with power management configuration section
+- Power plan cleanup during uninstall (removes custom eGPU plan)
+- Config file now includes: DisplayTimeoutMinutes, LidCloseActionAC, eGPUPowerPlanGuid
+- Improved state transition handling for all disconnect scenarios (safe-remove and direct unplug)
+- Version bump to 2.0.0 (major feature release)
+
+### Fixed
+- Settings now restore correctly on both safe-removal and direct unplug
+- Lid close action management now uses reliable CIM classes (Win32_PowerSettingDataIndex)
+- User preferences always take priority over saved values during restoration
+- Power plan restoration works in all disconnect scenarios
+
+### Technical Details
+- Uses Windows CIM classes (root\cimv2\power) for reliable power setting management
+- Source attribution: CIM method based on https://superuser.com/a/1700937 (CC BY-SA 4.0)
+- Lid action values: 0=DoNothing, 1=Sleep, 2=Hibernate, 3=ShutDown
+- Runtime state cleared on clean exits and when eGPU present at startup
+
+---
+
 ## [1.1.0] - 2025-11-14
 
 ### Added

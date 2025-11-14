@@ -25,8 +25,13 @@ This tool runs silently in the background and:
 - Detects when you safe-remove your eGPU
 - Waits for you to unplug and replug it
 - **Automatically enables it** when reconnected!
-- **Manages display sleep settings** - Keeps your display awake when using external monitors with eGPU
-- Shows **Windows notifications** for important events
+- **Intelligent Power Management:**
+  - Switches to custom "eGPU High Performance" power plan when connected
+  - Disables display sleep when using external monitors
+  - Prevents lid-close sleep on laptops (configurable)
+  - Restores all settings to your preferences when disconnected
+  - **Crash recovery** - automatically restores settings even if script crashes
+- Shows **Windows notifications** for all important events
 - Checks for updates daily and notifies you
 - Logs all activity with automatic rotation (max 500 KB)
 
@@ -55,7 +60,11 @@ irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.p
 
 3. **Select your eGPU from the list**
 
-4. **Done!** It will start automatically on every boot.
+4. **Configure power management preferences:**
+   - Display timeout duration (or use system default)
+   - Lid close action when eGPU disconnected (Do Nothing/Sleep/Hibernate/Shut Down)
+
+5. **Done!** It will start automatically on every boot with your custom settings.
 
 ---
 
@@ -146,7 +155,8 @@ Or if you have the file locally:
 ```
 C:\Users\YourName\.egpu-manager\
 ├── eGPU.ps1                  # Monitor script
-├── egpu-config.json          # Your eGPU configuration
+├── egpu-config.json          # Your eGPU configuration & power preferences
+├── runtime-state.json        # Crash recovery state (auto-managed)
 ├── egpu-manager.log          # Activity log (auto-rotates at 500 KB)
 └── egpu-manager.old.log      # Previous log backup
 ```
@@ -208,7 +218,25 @@ Your configuration will be preserved.
 ### Q: Will I know when my eGPU is enabled?
 **A:** Yes! The script shows a Windows toast notification whenever it successfully enables your eGPU, so you'll see a popup even if it's running in the background.
 
-### Q: Can I disable notifications?
+### Q: What power settings are managed?
+**A:** When your eGPU connects:
+- Switches to a custom "eGPU High Performance" power plan (max CPU, PCIe, no USB suspend)
+- Disables display sleep if external monitors detected
+- Sets lid close action to "Do Nothing" (prevents accidental sleep on laptops)
+
+When disconnected, everything restores to your configured preferences automatically.
+
+### Q: What if the script crashes while eGPU is connected?
+**A:** The script has built-in crash recovery! It saves the original settings to `runtime-state.json`. When restarted, it detects the eGPU is disconnected and automatically restores your preferred settings. Reboots with eGPU connected are handled intelligently and won't trigger false restorations.
+
+### Q: Can I customize the power preferences?
+**A:** Yes! During installation, you can configure:
+- Display timeout duration (in minutes, or keep system default)
+- Lid close action when eGPU is disconnected (Do Nothing/Sleep/Hibernate/Shut Down)
+
+To change these later, run the installer again and select "Reconfigure".
+
+### Q: How many eGPUs can I use?
 **A:** Currently supports one eGPU. For multiple eGPUs, you can modify the config or run multiple instances with different configs.
 
 ### Q: Does it slow down my system?

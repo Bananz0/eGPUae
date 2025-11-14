@@ -93,6 +93,22 @@ if ($Uninstall) {
     # Remove installation folder
     if (Test-Path $installPath) {
         Write-Host "  Removing installation folder..." -ForegroundColor Gray
+        
+        # Check for eGPU power plan in config before deleting
+        $configPath = Join-Path $installPath "egpu-config.json"
+        if (Test-Path $configPath) {
+            try {
+                $config = Get-Content $configPath | ConvertFrom-Json
+                if ($config.PSObject.Properties.Name -contains 'eGPUPowerPlanGuid' -and $config.eGPUPowerPlanGuid) {
+                    Write-Host "  Removing eGPU power plan..." -ForegroundColor Gray
+                    powercfg -delete $config.eGPUPowerPlanGuid 2>&1 | Out-Null
+                    Write-Host "  ✓ Power plan removed" -ForegroundColor Green
+                }
+            } catch {
+                # Silently continue if config can't be read
+            }
+        }
+        
         try {
             Remove-Item -Path $installPath -Recurse -Force -ErrorAction Stop
             Write-Host "  ✓ Folder removed" -ForegroundColor Green
@@ -273,7 +289,157 @@ if ($confirm -notlike "y*") {
     exit
 }
 
-# Step 3: Create installation directory and save files
+# Step 3: Power management preferences
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  POWER MANAGEMENT SETTINGS" -ForegroundColor Cyan
+Write-Host "========================================`n" -ForegroundColor Cyan
+
+Write-Host "The eGPU manager can automatically manage power settings when your eGPU is connected.`n" -ForegroundColor Gray
+
+# Display sleep timeout preference
+Write-Host "Display Sleep Timeout:" -ForegroundColor Yellow
+Write-Host "When eGPU disconnected, how many minutes until display sleeps?" -ForegroundColor Gray
+Write-Host "(Current system setting will be detected, or enter 0 for 'Never', or custom minutes)" -ForegroundColor DarkGray
+$displayTimeout = Read-Host "Minutes (press Enter to use current system setting)"
+
+$displayTimeoutValue = $null
+if (-not [string]::IsNullOrWhiteSpace($displayTimeout)) {
+    try {
+        $displayTimeoutValue = [int]$displayTimeout
+        if ($displayTimeoutValue -lt 0) {
+            Write-Host "Invalid value. Will use system default." -ForegroundColor Yellow
+            $displayTimeoutValue = $null
+        } else {
+            Write-Host "✓ Will restore to $displayTimeoutValue minutes when eGPU disconnected" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "Invalid input. Will use system default." -ForegroundColor Yellow
+        $displayTimeoutValue = $null
+    }
+}
+
+if ($null -eq $displayTimeoutValue) {
+    Write-Host "✓ Will use system's current setting when restoring" -ForegroundColor Green
+}
+
+Write-Host ""
+
+# Lid close action preference (informational for now)
+Write-Host "Lid Close Action:" -ForegroundColor Yellow
+Write-Host "When eGPU is connected with external monitors:" -ForegroundColor Gray
+Write-Host "  - Lid close action will be set to 'Do Nothing' (prevents sleep)" -ForegroundColor Gray
+Write-Host "  - When eGPU disconnected, original setting will be restored" -ForegroundColor Gray
+Write-Host "  - Note: Some devices may not support this feature" -ForegroundColor DarkGray
+
+Write-Host ""
+
+Write-Host ""
+
+# Lid close action preferences
+Write-Host "Lid Close Action (AC Power):" -ForegroundColor Yellow
+Write-Host "What should happen when you close the lid while plugged in?" -ForegroundColor Gray
+Write-Host ""
+Write-Host "When eGPU is CONNECTED:" -ForegroundColor Cyan
+Write-Host "  The script will automatically set lid action to 'Do Nothing'" -ForegroundColor Gray
+Write-Host "  (Prevents sleep so external monitors keep working)" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "When eGPU is DISCONNECTED, restore lid action to:" -ForegroundColor Cyan
+Write-Host "  [0] Do Nothing" -ForegroundColor Gray
+Write-Host "  [1] Sleep (most common)" -ForegroundColor Gray
+Write-Host "  [2] Hibernate" -ForegroundColor Gray
+Write-Host "  [3] Shut Down" -ForegroundColor Gray
+Write-Host "  [Enter] Keep current system setting" -ForegroundColor DarkGray
+
+$lidActionInput = Read-Host "`nYour choice"
+$lidActionValue = $null
+
+if (-not [string]::IsNullOrWhiteSpace($lidActionInput)) {
+    try {
+        $lidActionValue = [int]$lidActionInput
+        if ($lidActionValue -lt 0 -or $lidActionValue -gt 3) {
+            Write-Host "Invalid value. Will use system default." -ForegroundColor Yellow
+            $lidActionValue = $null
+        } else {
+            $lidActionName = switch ($lidActionValue) { 0 {"Do Nothing"} 1 {"Sleep"} 2 {"Hibernate"} 3 {"Shut Down"} }
+            Write-Host "✓ Will restore to '$lidActionName' when eGPU disconnected" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "Invalid input. Will use system default." -ForegroundColor Yellow
+        $lidActionValue = $null
+    }
+}
+
+if ($null -eq $lidActionValue) {
+    Write-Host "✓ Will use system's current setting when restoring" -ForegroundColor Green
+}
+
+# Power plan creation
+Write-Host "eGPU High Performance Power Plan:" -ForegroundColor Yellow
+Write-Host "Create a custom power plan optimized for maximum eGPU performance?" -ForegroundColor Gray
+Write-Host "  - Based on High Performance plan" -ForegroundColor Gray
+Write-Host "  - CPU: Maximum performance (100% min/max)" -ForegroundColor Gray
+Write-Host "  - PCIe Link State: Maximum performance" -ForegroundColor Gray
+Write-Host "  - USB: No selective suspend" -ForegroundColor Gray
+Write-Host "  - Automatically switches when eGPU connects/disconnects" -ForegroundColor Gray
+$createPowerPlan = Read-Host "`nCreate eGPU power plan? (Y/N)"
+
+$eGPUPowerPlanGuid = $null
+if ($createPowerPlan -like "y*") {
+    Write-Host "`nCreating eGPU High Performance power plan..." -ForegroundColor Yellow
+    
+    try {
+        # Check if plan already exists
+        $existingPlan = powercfg -list | Select-String "eGPU High Performance"
+        if ($existingPlan) {
+            # Extract GUID from existing plan
+            if ($existingPlan -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
+                $eGPUPowerPlanGuid = $Matches[1]
+                Write-Host "✓ Found existing eGPU power plan" -ForegroundColor Green
+            }
+        } else {
+            # Create new plan based on High Performance
+            $result = powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1
+            if ($result -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
+                $eGPUPowerPlanGuid = $Matches[1]
+                
+                # Rename the power plan
+                powercfg -changename $eGPUPowerPlanGuid "eGPU High Performance" "Optimized for maximum eGPU performance" | Out-Null
+                
+                # Configure for maximum performance
+                # CPU: 100% minimum and maximum
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
+                
+                # PCIe Link State Power Management: Off (maximum performance)
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PCIEXPRESS ASPM 0 | Out-Null
+                
+                # USB selective suspend: Disabled
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_USB USBSELECTIVESUSPEND 0 | Out-Null
+                
+                # Hard disk: Never turn off
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_DISK DISKIDLE 0 | Out-Null
+                
+                # Display: Never turn off (will be managed by script)
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE 0 | Out-Null
+                
+                # Apply settings
+                powercfg -setactive $eGPUPowerPlanGuid | Out-Null
+                
+                Write-Host "✓ Created and configured eGPU High Performance power plan" -ForegroundColor Green
+            } else {
+                Write-Host "✗ Failed to create power plan" -ForegroundColor Red
+                $eGPUPowerPlanGuid = $null
+            }
+        }
+    } catch {
+        Write-Host "✗ Failed to create power plan: $_" -ForegroundColor Red
+        $eGPUPowerPlanGuid = $null
+    }
+} else {
+    Write-Host "✓ Skipping power plan creation" -ForegroundColor Green
+}
+
+# Step 4: Create installation directory and save files
 Write-Host "`nSetting up installation..." -ForegroundColor Yellow
 
 if (-not (Test-Path $installPath)) {
@@ -287,6 +453,21 @@ $config = @{
     ConfiguredDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     InstalledVersion = "1.0.0"
     AutoUpdateCheck = $true
+}
+
+# Add display timeout preference if set
+if ($null -ne $displayTimeoutValue) {
+    $config.DisplayTimeoutMinutes = $displayTimeoutValue
+}
+
+# Add lid close action preference if set
+if ($null -ne $lidActionValue) {
+    $config.LidCloseActionAC = $lidActionValue
+}
+
+# Add eGPU power plan GUID if created
+if ($null -ne $eGPUPowerPlanGuid) {
+    $config.eGPUPowerPlanGuid = $eGPUPowerPlanGuid
 }
 
 $config | ConvertTo-Json | Set-Content $configPath
