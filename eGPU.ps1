@@ -1,6 +1,6 @@
-# eGPU Auto Re-enable Script (Polling Version)
+# eGPU Auto Re-enable Script (Enhanced Detection)
 # This script continuously monitors for eGPU physical reconnection and automatically enables it
-# Only re-enables after the eGPU has been physically disconnected and reconnected
+# Designed to run at startup and handle all eGPU hot-plug scenarios
 
 # ===== CONFIGURATION =====
 # Set your eGPU name (change this to match your GPU)
@@ -9,126 +9,159 @@ $egpu_name = "NVIDIA GeForce RTX 5070 Ti"
 $pollInterval = 2
 # =========================
 
-# Track whether eGPU was physically present in last check
-$script:egpuWasPresent = $false
+# Track previous state
+$script:lastKnownState = $null  # Will store: "present-ok", "present-disabled", or "absent"
 
-function Test-eGPUPresence {
-    # Check if eGPU exists in system at all (regardless of status)
+function Get-eGPUState {
+    # Get eGPU device info
     $egpu = Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
-    return ($null -ne $egpu)
-}
-
-function Get-eGPUInfo {
-    # Get full eGPU information
-    $egpu = Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
-    return $egpu
-}
-
-function Enable-eGPUIfNeeded {
-    param([bool]$PhysicalReconnection = $false)
     
-    # Find eGPU by name (even if disabled)
-    $egpu = Get-eGPUInfo
+    if ($null -eq $egpu) {
+        return "absent"
+    }
+    
+    # Check if device is actually accessible (not just cached)
+    # A truly connected device will have a valid problem code
+    try {
+        $problemCode = (Get-PnpDeviceProperty -InstanceId $egpu.InstanceId -KeyName "DEVPKEY_Device_ProblemCode" -ErrorAction Stop).Data
+        
+        # If we can query it and it's working (problem code 0) or disabled (problem code 22)
+        if ($egpu.Status -eq "OK") {
+            return "present-ok"
+        } elseif ($egpu.Status -eq "Error") {
+            # Check if it's actually there or just a ghost entry
+            # Problem code 22 = disabled, 45 = not connected
+            if ($problemCode -eq 45) {
+                return "absent"
+            } else {
+                return "present-disabled"
+            }
+        } else {
+            return "present-unknown"
+        }
+    } catch {
+        # If we can't query properties, device is likely not actually present
+        return "absent"
+    }
+}
+
+function Get-eGPUDevice {
+    return Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
+}
+
+function Enable-eGPU {
+    $egpu = Get-eGPUDevice
     
     if ($null -ne $egpu) {
-        $egpu_status = $egpu.Status
-        $egpu_id = $egpu.InstanceId
-        
-        # Only enable if it's a physical reconnection AND the device is disabled
-        if ($PhysicalReconnection -and $egpu_status -eq "Error") {
-            Write-Host ">>> ENABLING eGPU NOW..."
-            try {
-                Enable-PnpDevice -InstanceId $egpu_id -Confirm:$false
-                Write-Host ">>> eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
-                return "Enabled"
-            } catch {
-                Write-Host ">>> FAILED to enable eGPU: $_" -ForegroundColor Red
-                return "Failed"
-            }
-        }
-        elseif ($egpu_status -eq "OK") {
-            return "Already OK"
-        }
-        elseif ($egpu_status -eq "Error" -and -not $PhysicalReconnection) {
-            return "Disabled (waiting)"
+        try {
+            Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction Stop
+            return $true
+        } catch {
+            Write-Host "    ERROR: Failed to enable - $_" -ForegroundColor Red
+            return $false
         }
     }
-    return "Not Present"
+    return $false
 }
 
 Clear-Host
 Write-Host "=======================================" -ForegroundColor Cyan
-Write-Host "  eGPU Auto Re-enable Script (Polling)" -ForegroundColor Cyan
+Write-Host "  eGPU Auto Hot-Plug Manager" -ForegroundColor Cyan
 Write-Host "=======================================" -ForegroundColor Cyan
-Write-Host "eGPU Name: $egpu_name"
+Write-Host "eGPU: $egpu_name"
 Write-Host "Poll Interval: $pollInterval seconds"
+Write-Host "Monitoring Mode: Continuous"
 Write-Host "Press Ctrl+C to stop.`n"
 
-# Initialize tracking: check if eGPU is present at startup
-$script:egpuWasPresent = Test-eGPUPresence
-$egpuInfo = Get-eGPUInfo
+# Get initial state
+$script:lastKnownState = Get-eGPUState
+$startupTime = Get-Date -Format 'HH:mm:ss'
 
-if ($script:egpuWasPresent) {
-    Write-Host "[STARTUP] eGPU Status: PRESENT - $($egpuInfo.Status)" -ForegroundColor Green
-} else {
-    Write-Host "[STARTUP] eGPU Status: ABSENT" -ForegroundColor Yellow
+switch ($script:lastKnownState) {
+    "present-ok" {
+        Write-Host "[$startupTime] STARTUP: eGPU connected and enabled ✓" -ForegroundColor Green
+    }
+    "present-disabled" {
+        Write-Host "[$startupTime] STARTUP: eGPU connected but disabled (safe-removed)" -ForegroundColor Yellow
+        Write-Host "    Waiting for physical reconnection to auto-enable..."
+    }
+    "absent" {
+        Write-Host "[$startupTime] STARTUP: eGPU not connected" -ForegroundColor DarkGray
+        Write-Host "    Waiting for eGPU to be plugged in..."
+    }
 }
 
 Write-Host "`n--- Monitoring started ---`n"
 
 $checkCount = 0
+$lastHeartbeat = Get-Date
 
 # Main monitoring loop
 while ($true) {
     Start-Sleep -Seconds $pollInterval
     $checkCount++
     
-    # Check current presence
-    $egpuIsPresent = Test-eGPUPresence
-    $egpuInfo = Get-eGPUInfo
+    # Get current state
+    $currentState = Get-eGPUState
     
-    # Detect physical reconnection: was absent, now present
-    $physicalReconnection = (-not $script:egpuWasPresent) -and $egpuIsPresent
+    # Detect state changes
+    $stateChanged = $currentState -ne $script:lastKnownState
     
-    # Detect physical removal: was present, now absent
-    $physicalRemoval = $script:egpuWasPresent -and (-not $egpuIsPresent)
-    
-    # Only show output when there's a change or action
-    if ($physicalRemoval) {
-        Write-Host "`n[$(Get-Date -Format 'HH:mm:ss')] " -NoNewline
-        Write-Host ">>> eGPU PHYSICALLY REMOVED <<<" -ForegroundColor Red
-        Write-Host "    Waiting for reconnection...`n"
-    }
-    
-    if ($physicalReconnection) {
-        Write-Host "`n[$(Get-Date -Format 'HH:mm:ss')] " -NoNewline
-        Write-Host ">>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
-        Write-Host "    Device Status: $($egpuInfo.Status)"
+    if ($stateChanged) {
+        $timestamp = Get-Date -Format 'HH:mm:ss'
+        Write-Host "`n[$timestamp] STATE CHANGE DETECTED:" -ForegroundColor Cyan
+        Write-Host "    Was: $script:lastKnownState"
+        Write-Host "    Now: $currentState"
         
-        $result = Enable-eGPUIfNeeded -PhysicalReconnection $true
+        # Handle different state transitions
+        if ($script:lastKnownState -match "present" -and $currentState -eq "absent") {
+            Write-Host "`n    >>> eGPU PHYSICALLY UNPLUGGED <<<" -ForegroundColor Red
+            Write-Host "    Waiting for reconnection...`n"
+        }
+        elseif ($script:lastKnownState -eq "absent" -and $currentState -match "present") {
+            Write-Host "`n    >>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
+            
+            if ($currentState -eq "present-disabled") {
+                Write-Host "    Status: Disabled (from previous safe-removal)"
+                Write-Host "    Action: Enabling eGPU..." -ForegroundColor Green
+                
+                if (Enable-eGPU) {
+                    Write-Host "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
+                    $currentState = "present-ok"  # Update state after enabling
+                } else {
+                    Write-Host "    ✗ Failed to enable eGPU" -ForegroundColor Red
+                }
+            }
+            elseif ($currentState -eq "present-ok") {
+                Write-Host "    Status: Already enabled ✓" -ForegroundColor Green
+                Write-Host "    Action: No action needed"
+            }
+            Write-Host ""
+        }
+        elseif ($script:lastKnownState -eq "present-ok" -and $currentState -eq "present-disabled") {
+            Write-Host "`n    >>> eGPU DISABLED (Safe-removed via NVIDIA Control Panel) <<<" -ForegroundColor Yellow
+            Write-Host "    Waiting for physical unplug/replug to auto-enable...`n"
+        }
+        elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "present-ok") {
+            Write-Host "`n    >>> eGPU ENABLED (manually or by another process) <<<" -ForegroundColor Green
+            Write-Host ""
+        }
+    }
+    
+    # Heartbeat every 30 seconds to show script is still running
+    if (((Get-Date) - $lastHeartbeat).TotalSeconds -ge 30) {
+        $timestamp = Get-Date -Format 'HH:mm:ss'
+        $statusEmoji = switch ($currentState) {
+            "present-ok" { "✓" }
+            "present-disabled" { "⊗" }
+            "absent" { "○" }
+            default { "?" }
+        }
         
-        if ($result -eq "Enabled") {
-            Write-Host "    Action: Device was disabled, now enabled!" -ForegroundColor Green
-        } elseif ($result -eq "Already OK") {
-            Write-Host "    Action: Device is already enabled, no action needed." -ForegroundColor Cyan
-        } elseif ($result -eq "Failed") {
-            Write-Host "    Action: Failed to enable device!" -ForegroundColor Red
-        }
-        Write-Host ""
+        Write-Host "[$timestamp] Heartbeat $statusEmoji - State: $currentState" -ForegroundColor DarkGray
+        $lastHeartbeat = Get-Date
     }
     
-    # Silent status check - only show heartbeat every 30 checks (1 minute if polling every 2 seconds)
-    if ($checkCount % 30 -eq 0) {
-        $statusSymbol = if ($egpuIsPresent) { "●" } else { "○" }
-        $statusColor = if ($egpuIsPresent) { "Green" } else { "DarkGray" }
-        Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Heartbeat: $statusSymbol " -ForegroundColor $statusColor -NoNewline
-        if ($egpuIsPresent -and $null -ne $egpuInfo) {
-            Write-Host "eGPU present - Status: $($egpuInfo.Status)" -ForegroundColor $statusColor
-        } else {
-            Write-Host "eGPU absent" -ForegroundColor $statusColor
-        }
-    }
-    
-    # Update tracking state
-    $script:egpuWasPresent = $egpuIsPresent
+    # Update tracking
+    $script:lastKnownState = $currentState
 }
