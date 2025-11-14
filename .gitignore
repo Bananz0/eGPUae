@@ -1,0 +1,24 @@
+# Log files
+*.log
+*.old.log
+
+# Configuration files (contain user-specific data)
+egpu-config.json
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# PowerShell
+*.ps1.bak
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Temporary files
+*.tmp
+*.temp

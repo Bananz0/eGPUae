@@ -258,6 +258,8 @@ Write-Host "  eGPU: $($selectedGPU.FriendlyName)" -ForegroundColor White
 Write-Host "  Location: $installPath" -ForegroundColor Gray
 Write-Host "  Task: $taskName" -ForegroundColor Gray
 Write-Host "  Startup: Automatic (10 second delay)" -ForegroundColor Gray
+Write-Host "  Log File: $installPath\egpu-manager.log" -ForegroundColor Gray
+Write-Host "  Log Rotation: Automatic (max 500 KB)" -ForegroundColor Gray
 
 Write-Host "`nYour workflow:" -ForegroundColor Cyan
 Write-Host "  1. Safe-remove eGPU in NVIDIA Control Panel" -ForegroundColor Gray
@@ -287,7 +289,8 @@ Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  One-Line Remote Install" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "`nTo install on another machine, run this as Admin:" -ForegroundColor Yellow
-Write-Host "  irm YOUR_URL/Install.ps1 | iex" -ForegroundColor Gray
+Write-Host "  irm https://github.com/Bananz0/eGPUae/blob/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
+Write-Host "`n(Host both eGPU.ps1 and this installer on GitHub/web)" -ForegroundColor DarkGray
 
 Write-Host "`n"
 $testNow = Read-Host "Would you like to test the monitor now in this window? (Y/N)"
