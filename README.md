@@ -1,4 +1,4 @@
-# eGPU Auto-Enabler
+# eGPU Auto-Enable 🚀
 
 **Automatically re-enable your eGPU after hot-plugging on Windows**
 
@@ -16,7 +16,7 @@ Never manually enable your eGPU from Device Manager again! This tool monitors yo
 When using an external GPU (eGPU) via Thunderbolt/USB-C on Windows:
 1. You "safely remove" it using NVIDIA Control Panel (or Device Manager)
 2. You physically disconnect the eGPU
-3. When you plug it back in... **it stays disabled** 
+3. When you plug it back in... **it stays disabled** 😤
 4. You have to manually open Device Manager and enable it every time
 
 ## Solution
@@ -25,6 +25,7 @@ This tool runs silently in the background and:
 - Detects when you safe-remove your eGPU
 - Waits for you to unplug and replug it
 - **Automatically enables it** when reconnected!
+- **Manages display sleep settings** - Keeps your display awake when using external monitors with eGPU
 - Shows **Windows notifications** for important events
 - Checks for updates daily and notifies you
 - Logs all activity with automatic rotation (max 500 KB)
@@ -78,7 +79,7 @@ irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.p
 2. **Physically unplug the eGPU**
    - Disconnect the Thunderbolt/USB-C cable
 
-3. **Do whatever you need to do** 🎉
+3. **Do whatever you need to do** 
 
 4. **Plug the eGPU back in**
    - The script automatically detects it and enables it!
@@ -198,13 +199,16 @@ explorer "$env:USERPROFILE\.egpu-manager"
 ```
 
 ### Q: How do I update to a new version?
-**A:** The script checks for updates automatically once per day and will notify you if a new version is available. To update, simply run the installer again:
+**A:** The script checks for updates automatically once per day and shows a **Windows notification** if a new version is available. To update, simply run the installer again:
 ```powershell
 irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex
 ```
 Your configuration will be preserved.
 
-### Q: Can I disable update checks?
+### Q: Will I know when my eGPU is enabled?
+**A:** Yes! The script shows a Windows toast notification whenever it successfully enables your eGPU, so you'll see a popup even if it's running in the background.
+
+### Q: Can I disable notifications?
 **A:** Currently supports one eGPU. For multiple eGPUs, you can modify the config or run multiple instances with different configs.
 
 ### Q: Does it slow down my system?
@@ -275,13 +279,13 @@ MIT License - feel free to use, modify, and distribute!
 
 Created to solve the annoying eGPU hot-plug workflow on Windows.
 
-Inspired by the frustration of opening Device Manager every single time 😅
+Inspired by the frustration of opening Device Manager every single time after a long uni study session 
 
 ---
 
 ## Star This Repo!
 
-If this tool saved you time, consider giving it a star! ⭐
+If this tool saved you time, consider giving it a star! 
 
 It helps others discover this solution and motivates further development.
 
