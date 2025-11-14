@@ -14,7 +14,7 @@
     File Name      : eGPU.ps1
     Prerequisite   : PowerShell 7.0 or later
     Requires Admin : Yes (for pnputil device enabling)
-    Version        : 1.0.0
+    Version        : 1.1.0
     Repository     : https://github.com/Bananz0/eGPUae
 #>
 
@@ -32,6 +32,10 @@ $maxLogLines = 1000
 
 # Update check configuration
 $updateCheckInterval = 86400  # Check once per day (in seconds)
+
+# Display sleep management
+$savedDisplayTimeout = $null
+$displaySleepManaged = $false
 # =========================
 
 # Logging function with automatic rotation
@@ -83,6 +87,55 @@ function Write-Log {
     }
 }
 
+# Manage display sleep settings
+function Set-DisplaySleep {
+    param(
+        [bool]$Disable
+    )
+    
+    try {
+        if ($Disable) {
+            # Get current setting
+            $script:savedDisplayTimeout = (powercfg /q SCHEME_CURRENT SUB_VIDEO VIDEOIDLE | Select-String "Current AC Power Setting Index:" | ForEach-Object { $_.ToString().Split(':')[1].Trim() })
+            
+            if ($script:savedDisplayTimeout -ne "0x00000000") {
+                # Disable display sleep
+                powercfg /change monitor-timeout-ac 0 | Out-Null
+                $script:displaySleepManaged = $true
+                Write-Log "Display sleep disabled (saved timeout: $script:savedDisplayTimeout seconds)" "INFO"
+                return $true
+            }
+        } else {
+            # Restore original setting
+            if ($script:displaySleepManaged -and $script:savedDisplayTimeout) {
+                $timeoutMinutes = [int]("0x" + $script:savedDisplayTimeout) / 60
+                powercfg /change monitor-timeout-ac $timeoutMinutes | Out-Null
+                Write-Log "Display sleep restored to $timeoutMinutes minutes" "INFO"
+                $script:displaySleepManaged = $false
+                return $true
+            }
+        }
+    } catch {
+        Write-Log "Failed to manage display sleep: $_" "WARNING"
+    }
+    
+    return $false
+}
+
+# Check if external monitors are connected
+function Test-ExternalMonitor {
+    try {
+        $monitors = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams | 
+                    Where-Object { $_.Active -eq $true }
+        
+        # More than 1 active monitor = external monitor(s) present
+        return ($monitors.Count -gt 1)
+    } catch {
+        Write-Log "Failed to check external monitors: $_" "WARNING"
+        return $false
+    }
+}
+
 # Show Windows Toast Notification
 function Show-Notification {
     param(
@@ -92,8 +145,15 @@ function Show-Notification {
     )
     
     try {
-        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+        # Load WinRT assemblies (more robust approach from Toast Notification Script)
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        
+        # Load the required WinRT types
+        [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+        [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+        
+        # Use PowerShell app ID (works reliably without custom app registration)
+        $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
         
         $toastXml = @"
 <toast>
@@ -110,9 +170,8 @@ function Show-Notification {
         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
         $xml.LoadXml($toastXml)
         
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("eGPU Auto-Enable")
-        $notifier.Show($toast)
+        $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
         
         Write-Log "Notification shown: $Title" "INFO"
     } catch {
@@ -376,6 +435,13 @@ while ($true) {
                 if (Enable-eGPU -egpu_name $egpu_name) {
                     Write-Log "eGPU enabled successfully via auto-enable" "SUCCESS"
                     Show-Notification -Title "eGPU Enabled" -Message "Your $egpu_name has been automatically enabled and is ready to use."
+                    
+                    # Check if external monitors are connected and manage display sleep
+                    if (Test-ExternalMonitor) {
+                        Write-Log "External monitor(s) detected, disabling display sleep" "INFO"
+                        Set-DisplaySleep -Disable $true
+                    }
+                    
                     $currentState = "present-ok"
                 } else {
                     Write-Log "Failed to enable eGPU" "ERROR"
@@ -384,6 +450,12 @@ while ($true) {
             }
             elseif ($currentState -eq "present-ok") {
                 Write-Log "eGPU reconnected and already enabled" "SUCCESS"
+                
+                # Check if external monitors are connected and manage display sleep
+                if (Test-ExternalMonitor) {
+                    Write-Log "External monitor(s) detected, disabling display sleep" "INFO"
+                    Set-DisplaySleep -Disable $true
+                }
             }
         }
         elseif ($script:lastKnownState -eq "present-ok" -and $currentState -eq "present-disabled") {
@@ -394,6 +466,12 @@ while ($true) {
         }
         elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "absent") {
             Write-Log "eGPU physically unplugged (from disabled state)" "WARNING"
+            
+            # Restore display sleep when eGPU is unplugged
+            if ($script:displaySleepManaged) {
+                Write-Log "Restoring display sleep settings" "INFO"
+                Set-DisplaySleep -Disable $false
+            }
         }
         elseif ($script:lastKnownState -eq "absent" -and $currentState -eq "present-disabled") {
             Write-Log "eGPU reconnected (disabled), attempting auto-enable..." "INFO"
@@ -411,6 +489,12 @@ while ($true) {
                 
                 if ($currentState -eq "present-ok") {
                     Write-Log "Verified: eGPU is active and operational" "SUCCESS"
+                    
+                    # Check if external monitors are connected and manage display sleep
+                    if (Test-ExternalMonitor) {
+                        Write-Log "External monitor(s) detected, disabling display sleep" "INFO"
+                        Set-DisplaySleep -Disable $true
+                    }
                 } else {
                     Write-Log "Warning: Enable succeeded but state is $currentState" "WARNING"
                 }
