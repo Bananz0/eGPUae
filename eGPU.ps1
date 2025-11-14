@@ -5,18 +5,18 @@
 Unregister-Event -SourceIdentifier eGPUMonitor -ErrorAction SilentlyContinue
 
 # Set your eGPU name
-$egpu_name = "NVIDIA GeForce RTX 5070 Ti"
+$egpu_name = "NVIDIA GeForce RTX 3080"
 
 # Track whether eGPU was physically present in last check
 $script:egpuWasPresent = $false
 
-function Check-eGPUPresence {
+function Test-eGPUPresence {
     # Check if eGPU exists in system at all (regardless of status)
     $egpu = Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
-    return ($egpu -ne $null)
+    return ($null -ne $egpu)
 }
 
-function Enable-eGPU {
+function Enable-eGPUIfNeeded {
     param([bool]$PhysicalReconnection = $false)
     
     Write-Host "Checking eGPU status..."
@@ -24,7 +24,7 @@ function Enable-eGPU {
     # Find eGPU by name (even if disabled)
     $egpu = Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
     
-    if ($egpu) {
+    if ($null -ne $egpu) {
         $egpu_status = $egpu.Status
         $egpu_id = $egpu.InstanceId
         
@@ -33,9 +33,13 @@ function Enable-eGPU {
         
         # Only enable if it's a physical reconnection AND the device is disabled
         if ($PhysicalReconnection -and $egpu_status -eq "Error") {
-            Write-Host "Physical reconnection detected! Enabling eGPU..."
-            Enable-PnpDevice -InstanceId $egpu_id -Confirm:$false
-            Write-Host "eGPU enabled successfully!"
+            Write-Host ">>> Physical reconnection detected! Enabling eGPU..."
+            try {
+                Enable-PnpDevice -InstanceId $egpu_id -Confirm:$false
+                Write-Host ">>> eGPU enabled successfully!"
+            } catch {
+                Write-Host ">>> Failed to enable eGPU: $_"
+            }
         }
         elseif ($egpu_status -eq "OK") {
             Write-Host "eGPU is already enabled."
@@ -49,20 +53,23 @@ function Enable-eGPU {
     }
 }
 
-Write-Host "eGPU Auto Re-enable Script Started!"
+Write-Host "=== eGPU Auto Re-enable Script Started ==="
 Write-Host "Monitoring for physical eGPU reconnection..."
+Write-Host "eGPU Name: $egpu_name"
 Write-Host "Press Ctrl+C to stop.`n"
 
 # Initialize tracking: check if eGPU is present at startup
-$script:egpuWasPresent = Check-eGPUPresence
+$script:egpuWasPresent = Test-eGPUPresence
 if ($script:egpuWasPresent) {
-    Write-Host "eGPU detected at startup."
+    Write-Host "[STARTUP] eGPU is currently PRESENT"
 } else {
-    Write-Host "eGPU not present at startup."
+    Write-Host "[STARTUP] eGPU is currently ABSENT"
 }
 
 # Check initial status (but don't auto-enable on script start)
-Enable-eGPU -PhysicalReconnection $false
+Enable-eGPUIfNeeded -PhysicalReconnection $false
+
+Write-Host "`n--- Waiting for device events ---`n"
 
 # Register for device change events
 Register-WmiEvent -Class Win32_DeviceChangeEvent -SourceIdentifier eGPUMonitor
@@ -77,22 +84,43 @@ do {
         2 {"Device arrival"}
         3 {"Device removal"}
         4 {"Docking"}
+        default {"Unknown ($eventType)"}
     }
     
-    Write-Host "`n[$(Get-Date -Format 'HH:mm:ss')] Event detected: $eventTypeName"
+    Write-Host "`n[$(Get-Date -Format 'HH:mm:ss')] Device Event: $eventTypeName"
     
     # Check current presence
-    $egpuIsPresent = Check-eGPUPresence
+    $egpuIsPresent = Test-eGPUPresence
+    
+    # Show current state
+    if ($egpuIsPresent) {
+        Write-Host "  Current state: eGPU PRESENT"
+    } else {
+        Write-Host "  Current state: eGPU ABSENT"
+    }
+    
+    if ($script:egpuWasPresent) {
+        Write-Host "  Previous state: eGPU was PRESENT"
+    } else {
+        Write-Host "  Previous state: eGPU was ABSENT"
+    }
     
     # Detect physical reconnection: was absent, now present
     $physicalReconnection = (-not $script:egpuWasPresent) -and $egpuIsPresent
     
+    # Detect physical removal: was present, now absent
+    $physicalRemoval = $script:egpuWasPresent -and (-not $egpuIsPresent)
+    
+    if ($physicalRemoval) {
+        Write-Host "  >>> PHYSICAL REMOVAL DETECTED <<<"
+    }
+    
     if ($physicalReconnection) {
-        Write-Host "*** Physical reconnection detected! ***"
+        Write-Host "  >>> PHYSICAL RECONNECTION DETECTED <<<"
     }
     
     # Try to enable eGPU only if it's a physical reconnection
-    Enable-eGPU -PhysicalReconnection $physicalReconnection
+    Enable-eGPUIfNeeded -PhysicalReconnection $physicalReconnection
     
     # Update tracking state
     $script:egpuWasPresent = $egpuIsPresent
