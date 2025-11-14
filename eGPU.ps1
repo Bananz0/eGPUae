@@ -92,34 +92,85 @@ function Set-DisplaySleep {
     param(
         [bool]$Disable
     )
-    
+
     try {
         if ($Disable) {
-            # Get current setting
-            $script:savedDisplayTimeout = (powercfg /q SCHEME_CURRENT SUB_VIDEO VIDEOIDLE | Select-String "Current AC Power Setting Index:" | ForEach-Object { $_.ToString().Split(':')[1].Trim() })
-            
-            if ($script:savedDisplayTimeout -ne "0x00000000") {
-                # Disable display sleep
-                powercfg /change monitor-timeout-ac 0 | Out-Null
-                $script:displaySleepManaged = $true
-                Write-Log "Display sleep disabled (saved timeout: $script:savedDisplayTimeout seconds)" "INFO"
+            # If already managing, do nothing
+            if ($script:displaySleepManaged) {
+                Write-Log "Set-DisplaySleep: Already managing display sleep, skipping disable." "INFO"
                 return $true
             }
+
+            # Read raw line with Current AC Power Setting Index
+            $rawLine = powercfg /q SCHEME_CURRENT SUB_VIDEO VIDEOIDLE |
+                       Select-String "Current AC Power Setting Index" -SimpleMatch |
+                       ForEach-Object { $_.Line.Trim() } | Select-Object -First 1
+
+            if (-not $rawLine) {
+                Write-Log "Set-DisplaySleep: Could not read current AC timeout from powercfg." "WARNING"
+                return $false
+            }
+
+            # Extract hex value (e.g. 0x00000078)
+            if ($rawLine -match "0x[0-9A-Fa-f]+") {
+                $hex = $Matches[0]
+            } else {
+                # If line contains ":" parted value like "Current AC Power Setting Index: 0x00000078"
+                $parts = $rawLine -split ":" 
+                $maybe = $parts[-1].Trim()
+                if ($maybe -match "0x[0-9A-Fa-f]+") {
+                    $hex = $Matches[0]
+                } else {
+                    Write-Log "Set-DisplaySleep: Failed to parse hex timeout from: '$rawLine'." "WARNING"
+                    return $false
+                }
+            }
+
+            # Convert hex string to integer seconds
+            try {
+                $seconds = [Convert]::ToInt32($hex, 16)
+            } catch {
+                Write-Log "Set-DisplaySleep: Failed to convert hex '$hex' to integer: $_" "WARNING"
+                return $false
+            }
+
+            # Save seconds in script scope for restore; do not touch DC settings
+            $script:savedDisplayTimeout = $seconds
+
+            if ($seconds -ne 0) {
+                powercfg /change monitor-timeout-ac 0 | Out-Null
+                $script:displaySleepManaged = $true
+                Write-Log "Display sleep disabled (saved timeout: $seconds seconds)" "INFO"
+                return $true
+            } else {
+                Write-Log "Set-DisplaySleep: AC timeout already set to 'never' (0 seconds). Not changing." "INFO"
+                return $false
+            }
         } else {
-            # Restore original setting
-            if ($script:displaySleepManaged -and $script:savedDisplayTimeout) {
-                $timeoutMinutes = [int]("0x" + $script:savedDisplayTimeout) / 60
+            # Restore original setting (only if we previously managed it)
+            if ($script:displaySleepManaged -and $script:savedDisplayTimeout -ne $null) {
+                # Convert seconds → minutes: use ceiling so sub-minute values don't become 0
+                $timeoutMinutes = [math]::Ceiling($script:savedDisplayTimeout / 60)
+
+                # If original was < 60s we restore to 1 minute (powercfg expects minutes)
+                # If the original was 0 we will set 0 (never) accordingly
+                if ($script:savedDisplayTimeout -eq 0) {
+                    $timeoutMinutes = 0
+                }
+
                 powercfg /change monitor-timeout-ac $timeoutMinutes | Out-Null
-                Write-Log "Display sleep restored to $timeoutMinutes minutes" "INFO"
+                Write-Log "Display sleep restored to $timeoutMinutes minute(s) (original: $($script:savedDisplayTimeout) seconds)" "INFO"
                 $script:displaySleepManaged = $false
                 return $true
+            } else {
+                Write-Log "Set-DisplaySleep: Nothing to restore (not previously managed or no saved value)." "INFO"
+                return $false
             }
         }
     } catch {
         Write-Log "Failed to manage display sleep: $_" "WARNING"
+        return $false
     }
-    
-    return $false
 }
 
 # Check if external monitors are connected
@@ -143,39 +194,76 @@ function Show-Notification {
         [string]$Message,
         [string]$Type = "Info"
     )
-    
+
     try {
-        # Load WinRT assemblies (more robust approach from Toast Notification Script)
-        Add-Type -AssemblyName System.Runtime.WindowsRuntime
-        
-        # Load the required WinRT types
-        [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-        [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
-        
-        # Use PowerShell app ID (works reliably without custom app registration)
+        # Attempt WinRT toast (works when an AUMID is usable)
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+
+        # Ensure WinRT types are available; using try/catch in case of restrictions
+        try {
+            [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+            [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+        } catch {
+            throw "WinRT types not available in this process: $_"
+        }
+
+        # Use PowerShell app id (best-effort). If this is not registered, CreateToastNotifier will still often accept it but may fail.
         $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
-        
+
+        $escapedTitle = [System.Security.SecurityElement]::Escape($Title)
+        $escapedMessage = [System.Security.SecurityElement]::Escape($Message)
+
         $toastXml = @"
 <toast>
     <visual>
         <binding template="ToastGeneric">
-            <text>$Title</text>
-            <text>$Message</text>
+            <text>$escapedTitle</text>
+            <text>$escapedMessage</text>
         </binding>
     </visual>
     <audio src="ms-winsoundevent:Notification.Default" />
 </toast>
 "@
-        
+
         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
         $xml.LoadXml($toastXml)
-        
+
         $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
-        [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
-        
-        Write-Log "Notification shown: $Title" "INFO"
+        $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
+        $notifier.Show($toast)
+
+        Write-Log "Notification shown (WinRT): $Title" "INFO"
+        return
     } catch {
-        Write-Log "Failed to show notification: $_" "INFO"
+        # WinRT toast failed — fall back to a tray balloon notification using Windows Forms
+        Write-Log "WinRT toast failed, falling back to tray notification: $_" "WARNING"
+    }
+
+    # Fallback: NotifyIcon balloon
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+
+        $notify = New-Object System.Windows.Forms.NotifyIcon
+        $notify.Icon = [System.Drawing.SystemIcons]::Information
+        $notify.BalloonTipTitle = $Title
+        $notify.BalloonTipText = $Message
+        $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+
+        # Show icon then balloon tip, then remove icon after short delay
+        $notify.Visible = $true
+        # ShowBalloonTip(timeout) expects milliseconds; supply 5000 (5s)
+        $notify.ShowBalloonTip(5000)
+
+        # Schedule cleanup on a background job so we don't block
+        Start-Job -ScriptBlock {
+            param($ni)
+            Start-Sleep -Seconds 6
+            try { $ni.Visible = $false; $ni.Dispose() } catch {}
+        } -ArgumentList $notify | Out-Null
+
+        Write-Log "Notification shown (tray fallback): $Title" "INFO"
+    } catch {
+        Write-Log "Failed to show any notification (WinRT and tray fallback failed): $_" "INFO"
     }
 }
 
