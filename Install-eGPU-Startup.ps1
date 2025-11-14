@@ -2,7 +2,7 @@
 # Interactive setup for automatic eGPU re-enabling at startup
 
 # VERSION CONSTANT - Update this when releasing new versions
-$SCRIPT_VERSION = "2.0.0"
+$SCRIPT_VERSION = "2.1.0"
 
 <#
 .SYNOPSIS
@@ -31,7 +31,7 @@ $SCRIPT_VERSION = "2.0.0"
     File Name      : Install-eGPU-Startup.ps1
     Prerequisite   : PowerShell 7.0 or later
     Requires Admin : Yes
-    Version        : 2.0.0
+    Version        : 2.1.0
     Repository     : https://github.com/Bananz0/eGPUae
 #>
 
