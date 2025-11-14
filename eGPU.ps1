@@ -1,12 +1,44 @@
-# eGPU Auto Re-enable Script (Enhanced Detection)
+# eGPU Auto Re-enable Script
 # This script continuously monitors for eGPU physical reconnection and automatically enables it
 # Designed to run at startup and handle all eGPU hot-plug scenarios
 
 # ===== CONFIGURATION =====
-# Set your eGPU name (change this to match your GPU)
-$egpu_name = "NVIDIA GeForce RTX 5070 Ti"
+# Paths
+$installPath = Join-Path $env:USERPROFILE ".egpu-manager"
+$configPath = Join-Path $installPath "egpu-config.json"
+
 # How often to check for changes (in seconds)
 $pollInterval = 2
+
+# Load eGPU name from config file
+$egpu_name = $null
+
+if (-not (Test-Path $configPath)) {
+    Write-Host "[$startupTime] ERROR: Config file not found at $configPath" -ForegroundColor Red
+    Write-Host "    Please run the installer script again to configure your eGPU." -ForegroundColor Yellow
+    Write-Host "    Exiting in 20 seconds..." -ForegroundColor Gray
+    Start-Sleep -Seconds 20
+    exit
+}
+
+try {
+    $config = Get-Content $configPath | ConvertFrom-Json
+    $egpu_name = $config.eGPU_Name
+} catch {
+    Write-Host "[$startupTime] ERROR: Could not read or parse config file $configPath" -ForegroundColor Red
+    Write-Host "    Error: $_" -ForegroundColor Red
+    Write-Host "    Exiting in 20 seconds..." -ForegroundColor Gray
+    Start-Sleep -Seconds 20
+    exit
+}
+
+if ([string]::IsNullOrEmpty($egpu_name)) {
+    Write-Host "[$startupTime] ERROR: eGPU_Name is not set in $configPath" -ForegroundColor Red
+    Write-Host "    Please try re-running the installer." -ForegroundColor Yellow
+    Write-Host "    Exiting in 20 seconds..." -ForegroundColor Gray
+    Start-Sleep -Seconds 20
+    exit
+}
 # =========================
 
 # Track previous state
