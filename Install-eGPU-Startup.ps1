@@ -729,31 +729,68 @@ $action = New-ScheduledTaskAction -Execute "pwsh.exe" -Argument "-WindowStyle Hi
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $trigger.Delay = "PT10S"
 
-# Create principal
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+# Create principal - Use S4U for better reliability when running manually
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Highest
 
 # Create settings
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0)
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0) -MultipleInstances IgnoreNew
 
 # Register the task
 Register-ScheduledTask -TaskName $taskName -Description $taskDescription -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
 
 Write-Host "✓ Scheduled task created" -ForegroundColor Green
 
-# Step 5: Show completion info
+# Step 5: Show completion info and offer to start now
 Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "  Installation Complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 
 Write-Host "`nConfiguration:" -ForegroundColor Cyan
 Write-Host "  eGPU: $($selectedGPU.FriendlyName)" -ForegroundColor White
+Write-Host "  Instance ID: $($selectedGPU.InstanceId)" -ForegroundColor DarkGray
 Write-Host "  Location: $installPath" -ForegroundColor Gray
 Write-Host "  Task: $taskName" -ForegroundColor Gray
-Write-Host "  Startup: Automatic (10 second delay)" -ForegroundColor Gray
 Write-Host "  Log File: $installPath\egpu-manager.log" -ForegroundColor Gray
-Write-Host "  Log Rotation: Automatic (max 500 KB)" -ForegroundColor Gray
 
-Write-Host "`nYour workflow:" -ForegroundColor Cyan
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  Start Monitoring" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+Write-Host "`nWhen would you like to start the eGPU monitor?" -ForegroundColor Yellow
+Write-Host "  [1] Start now (watch live log)" -ForegroundColor Gray
+Write-Host "  [2] Start on next reboot (automatic)" -ForegroundColor Gray
+Write-Host ""
+
+$startChoice = Read-Host "Your choice [1-2]"
+
+if ($startChoice -eq "1") {
+    Write-Host "`nStarting eGPU monitor..." -ForegroundColor Cyan
+    Write-Host "Press Ctrl+C to stop monitoring`n" -ForegroundColor DarkGray
+    Write-Host "========================================`n" -ForegroundColor Gray
+    
+    Start-Sleep -Seconds 1
+    
+    # Start the task in background
+    Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    
+    # Tail the log file
+    try {
+        Get-Content -Path "$installPath\egpu-manager.log" -Wait -Tail 50
+    } catch {
+        Write-Host "`n⚠ Could not tail log file. Monitor is running in background." -ForegroundColor Yellow
+        Write-Host "View logs with: Get-Content `"$installPath\egpu-manager.log`" -Tail 50" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "`n✓ Monitor will start automatically on next reboot" -ForegroundColor Green
+    Write-Host "  (Starts 10 seconds after Windows boots)" -ForegroundColor DarkGray
+}
+
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  Your Workflow" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+Write-Host "`nUsing your eGPU:" -ForegroundColor Yellow
 Write-Host "  1. Safe-remove eGPU in NVIDIA Control Panel" -ForegroundColor Gray
 Write-Host "  2. Physically unplug the eGPU" -ForegroundColor Gray
 Write-Host "  3. Plug it back in → Automatically enables! ✓" -ForegroundColor Green
@@ -762,41 +799,19 @@ Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  Quick Commands" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
-Write-Host "`nTest now (start monitoring in this window):" -ForegroundColor Yellow
-Write-Host "  pwsh `"$monitorScriptPath`"" -ForegroundColor Gray
-
-Write-Host "`nStart the background task now:" -ForegroundColor Yellow
+Write-Host "`nManually start/stop the monitor:" -ForegroundColor Yellow
 Write-Host "  Start-ScheduledTask -TaskName '$taskName'" -ForegroundColor Gray
+Write-Host "  Stop-ScheduledTask -TaskName '$taskName'" -ForegroundColor Gray
 
-Write-Host "`nView logs/config folder:" -ForegroundColor Yellow
+Write-Host "`nView logs:" -ForegroundColor Yellow
+Write-Host "  Get-Content `"$installPath\egpu-manager.log`" -Tail 50" -ForegroundColor Gray
+Write-Host "  Get-Content `"$installPath\egpu-manager.log`" -Wait  # Live tail" -ForegroundColor Gray
+
+Write-Host "`nOpen config folder:" -ForegroundColor Yellow
 Write-Host "  explorer `"$installPath`"" -ForegroundColor Gray
 
-Write-Host "`nView latest log entries:" -ForegroundColor Yellow
-Write-Host "  Get-Content `"$installPath\egpu-manager.log`" -Tail 50" -ForegroundColor Gray
-
-Write-Host "`nReconfigure (change eGPU):" -ForegroundColor Yellow
-Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
-
-Write-Host "`nUninstall:" -ForegroundColor Yellow
-Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
-Write-Host "  # Then choose option [3] Uninstall" -ForegroundColor DarkGray
-
-Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "  One-Line Remote Install" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "`nTo install on another machine, run this as Admin:" -ForegroundColor Yellow
+Write-Host "`nReconfigure or Update:" -ForegroundColor Yellow
 Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
 
 Write-Host "`n"
-$testNow = Read-Host "Would you like to test the monitor now in this window? (Y/N)"
-
-if ($testNow -like "y*") {
-    Write-Host "`nStarting monitor..." -ForegroundColor Green
-    Write-Host "Press Ctrl+C to stop`n" -ForegroundColor Gray
-    Start-Sleep -Seconds 2
-    & pwsh -File $monitorScriptPath
-} else {
-    Write-Host "`nDone! The monitor will start automatically on next boot." -ForegroundColor Green
-    Write-Host "Or start it now with: Start-ScheduledTask -TaskName '$taskName'`n" -ForegroundColor Gray
-    pause
-}
+pause

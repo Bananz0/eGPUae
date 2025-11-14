@@ -320,7 +320,18 @@ function Set-DisplaySleep {
                 return $true
             } else {
                 Write-Log "Set-DisplaySleep: AC timeout already set to 'never' (0 seconds). Not changing." "INFO"
-                return $false
+                $script:displaySleepManaged = $true
+                # Still mark as managed so we can restore user preference later
+                # Use user preference or default to a sensible value
+                if ($null -eq $script:savedDisplayTimeout -or $script:savedDisplayTimeout -eq 0) {
+                    # Set a default from user preference or use 5 minutes
+                    if ($null -ne $script:userDisplayTimeoutMinutes -and $script:userDisplayTimeoutMinutes -gt 0) {
+                        $script:savedDisplayTimeout = $script:userDisplayTimeoutMinutes * 60
+                    } else {
+                        $script:savedDisplayTimeout = 300  # 5 minutes default
+                    }
+                }
+                return $true
             }
         } else {
             # Restore setting based on user preference or saved value
@@ -381,16 +392,25 @@ function Set-PowerPlan {
             try {
                 $currentPlan = powercfg -GETACTIVESCHEME
                 if ($currentPlan -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
-                    $script:savedPowerPlan = $Matches[1]
+                    $currentPlanGuid = $Matches[1]
+                    
+                    # If already on eGPU plan, still mark as managed (so we can restore later)
+                    if ($currentPlanGuid -eq $script:eGPUPowerPlanGuid) {
+                        Write-Log "Already using eGPU power plan" "INFO"
+                        $script:powerPlanManaged = $true
+                        # But we need to know what to restore to - check runtime state or use a default
+                        if ($null -eq $script:savedPowerPlan) {
+                            # Try to get a sensible default (Balanced plan GUID)
+                            $script:savedPowerPlan = "381b4222-f694-41f0-9685-ff5bb260df2e"
+                        }
+                        return $true
+                    }
+                    
+                    # Save current plan to restore later
+                    $script:savedPowerPlan = $currentPlanGuid
                     
                     # Persist to config file for crash recovery
                     Save-RuntimeState -PowerPlan $script:savedPowerPlan
-                    
-                    # Don't switch if already on eGPU plan
-                    if ($script:savedPowerPlan -eq $script:eGPUPowerPlanGuid) {
-                        Write-Log "Already using eGPU power plan" "INFO"
-                        return $false
-                    }
                 }
             } catch {
                 Write-Log "Could not detect current power plan: $_" "WARNING"
@@ -490,8 +510,20 @@ function Set-LidCloseAction {
                 $actionName = switch ($script:savedLidCloseAction) { 0 {"Do Nothing"} 1 {"Sleep"} 2 {"Hibernate"} 3 {"Shut Down"} default {"Unknown"} }
                 Write-Log "Lid close action set to 'Do Nothing' (saved: $actionName)" "INFO"
                 return $true
+            } else {
+                Write-Log "Lid close action already set to 'Do Nothing'" "INFO"
+                $script:lidCloseManaged = $true
+                # Still mark as managed so we can restore user preference later
+                # Use user preference or default to Sleep
+                if ($null -eq $script:savedLidCloseAction -or $script:savedLidCloseAction -eq 0) {
+                    if ($null -ne $script:userLidCloseAction) {
+                        $script:savedLidCloseAction = $script:userLidCloseAction
+                    } else {
+                        $script:savedLidCloseAction = 1  # Default to Sleep
+                    }
+                }
+                return $true
             }
-            return $false
         } else {
             # Restore original setting
             if ($script:lidCloseManaged -and $null -ne $script:savedLidCloseAction) {
