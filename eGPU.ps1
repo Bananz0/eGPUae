@@ -37,7 +37,8 @@ function Get-eGPUState {
                 return "present-disabled"
             }
         } else {
-            return "present-unknown"
+            # Treat "unknown" status as absent (device unplugged but cached)
+            return "absent"
         }
     } catch {
         # If we can't query properties, device is likely not actually present
@@ -194,13 +195,14 @@ while ($true) {
             Write-Host "`n    >>> eGPU ENABLED (manually or by another process) <<<" -ForegroundColor Green
             Write-Host ""
         }
-        # NEW: Handle transition through "unknown" state during physical reconnection
-        elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "present-unknown") {
-            Write-Host "`n    >>> eGPU RECONNECTING (detected hardware change) <<<" -ForegroundColor Yellow
-            Write-Host "    Waiting for device to stabilize...`n"
+        # Handle transition to absent (unknown state = unplugged)
+        elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "absent") {
+            Write-Host "`n    >>> eGPU PHYSICALLY UNPLUGGED <<<" -ForegroundColor Red
+            Write-Host "    Waiting for reconnection...`n"
         }
-        elseif ($script:lastKnownState -eq "present-unknown" -and $currentState -eq "present-disabled") {
-            Write-Host "`n    >>> eGPU RECONNECTION COMPLETE <<<" -ForegroundColor Yellow
+        # Handle reconnection from absent back to disabled
+        elseif ($script:lastKnownState -eq "absent" -and $currentState -eq "present-disabled") {
+            Write-Host "`n    >>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
             Write-Host "    Status: Device reconnected but disabled"
             Write-Host "    Action: Enabling eGPU..." -ForegroundColor Green
             
@@ -235,7 +237,7 @@ while ($true) {
             "present-ok" { "✓" }
             "present-disabled" { "⊗" }
             "absent" { "○" }
-            default { "?" }
+            default { "○" }
         }
         
         Write-Host "[$timestamp] Heartbeat $statusEmoji - State: $currentState" -ForegroundColor DarkGray
