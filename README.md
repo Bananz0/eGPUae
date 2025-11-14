@@ -4,6 +4,7 @@
 
 Never manually enable your eGPU from Device Manager again! This tool monitors your external GPU and automatically enables it whenever you reconnect it after safe-removal.
 
+[![CodeFactor](https://www.codefactor.io/repository/github/bananz0/egpuae/badge/main)](https://www.codefactor.io/repository/github/bananz0/egpuae/overview/main)
 [![PowerShell](https://img.shields.io/badge/PowerShell-7.0+-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
