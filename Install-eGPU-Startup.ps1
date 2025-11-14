@@ -455,6 +455,7 @@ try {
 
 # Get current lid close action
 $currentLidAction = "Unknown"
+$currentLidActionValue = $null
 try {
     $powerNamespace = @{ Namespace = 'root\cimv2\power' }
     $curPlan = Get-CimInstance @powerNamespace -Class Win32_PowerPlan -Filter "IsActive = TRUE"
@@ -468,7 +469,8 @@ try {
             -Filter "InstanceID = 'Microsoft:PowerSettingDataIndex\\$planGuid\\AC\\$lidGuid'"
         
         if ($pluggedInLidSetting) {
-            $currentLidAction = switch ($pluggedInLidSetting.SettingIndexValue) {
+            $currentLidActionValue = $pluggedInLidSetting.SettingIndexValue
+            $currentLidAction = switch ($currentLidActionValue) {
                 0 {"Do Nothing"}
                 1 {"Sleep"}
                 2 {"Hibernate"}
@@ -549,6 +551,10 @@ if (-not [string]::IsNullOrWhiteSpace($lidActionInput)) {
 
 if ($null -eq $lidActionValue) {
     Write-Host "✓ Will use system's current setting when restoring" -ForegroundColor Green
+    # Use the detected current value as the preference
+    if ($null -ne $currentLidActionValue) {
+        $lidActionValue = $currentLidActionValue
+    }
 }
 
 # ==================== STEP 3: POWER PLAN CREATION ====================

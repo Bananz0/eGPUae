@@ -91,21 +91,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Known Issues
 - Single eGPU support only (multi-eGPU planned for future)
 - Windows 10/11 only
-
 ---
 
-## [Unreleased]
+## Planned Features (Roadmap)
 
-### Planned Features
-- Multi-eGPU support
-- Custom poll interval configuration
-- System tray icon for easy control
-- Statistics tracking (reconnection count, uptime)
-- Configurable log rotation settings
-- Option to disable notifications
+Here's a look at what's planned for future versions:
 
----
-
-## Version History
-
-- **1.0.0** (2025-11-14) - Initial release
+-   **System Tray Icon:** Add an icon to the system tray for quick status view and manual controls (e.g., "Enable/Disable", "Pause Monitoring").
+-   **Multi-eGPU Support:** Allow the tool to configure and manage multiple eGPUs independently.
+-   **Application Auto-Launch:** Provide an option to launch specific applications (e.g., Steam, Adobe Premiere) when the eGPU is successfully enabled.
+-   **Statistics Dashboard:** Track and display usage statistics (e.g., reconnection count, uptime, successful auto-enable rate).
+-   **Scheduled eGPU Enable/Disable:** Add time-based automation for enabling or disabling the eGPU.
+-   **Customizable Notifications:** Allow users to set custom notification sounds for success/failure events.
+-   **Project Branding:** Create a custom logo for the project.
