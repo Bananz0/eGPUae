@@ -3,7 +3,7 @@
 # Designed to run at startup and handle all eGPU hot-plug scenarios
 
 # VERSION CONSTANT - Update this when releasing new versions
-$SCRIPT_VERSION = "2.1.0"
+$SCRIPT_VERSION = "2.2.0"
 
 <#
 .SYNOPSIS
@@ -17,7 +17,7 @@ $SCRIPT_VERSION = "2.1.0"
     File Name      : eGPU.ps1
     Prerequisite   : PowerShell 7.0 or later
     Requires Admin : Yes (for pnputil device enabling)
-    Version        : 2.1.0
+    Version        : 2.2.0
     Repository     : https://github.com/Bananz0/eGPUae
 #>
 
