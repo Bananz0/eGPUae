@@ -10,7 +10,7 @@
     It eliminates the need to manually enable the eGPU from Device Manager.
 
 .PARAMETER Uninstall
-    (Installer only) Removes the eGPU Auto-Enable tool from your system.
+    Removes the eGPU Auto-Enable tool from your system.
 
 .EXAMPLE
     .\Install-eGPU-Startup.ps1
@@ -21,14 +21,15 @@
     Removes the eGPU Auto-Enable tool from your system.
 
 .EXAMPLE
-    irm https://raw.githubusercontent.com/YourUsername/eGPUae/main/Install-eGPU-Startup.ps1 | iex
+    irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex
     Installs the eGPU Auto-Enable tool in one line.
 
 .NOTES
-    File Name      : eGPU.ps1 / Install-eGPU-Startup.ps1
+    File Name      : Install-eGPU-Startup.ps1
     Prerequisite   : PowerShell 7.0 or later
     Requires Admin : Yes
     Version        : 1.0.0
+    Repository     : https://github.com/Bananz0/eGPUae
 #>
 
 param(
@@ -71,19 +72,12 @@ if ($Uninstall) {
     }
     
     Write-Host "`nUninstalling..." -ForegroundColor Yellow
-
-    # In the uninstall section, add these additional cleanup steps
+    
     # Stop any running instances of the script
-    $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.MainWindowTitle -like "*eGPU*"}
+    $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.CommandLine -like "*eGPU.ps1*"}
     if ($runningProcesses) {
         Write-Host "  Stopping running eGPU monitor processes..." -ForegroundColor Gray
-        $runningProcesses | Stop-Process -Force
-    }
-
-    # Remove registry entries if any
-    if (Test-Path "HKCU:\Software\eGPU-AutoEnable") {
-        Write-Host "  Removing registry entries..." -ForegroundColor Gray
-        Remove-Item -Path "HKCU:\Software\eGPU-AutoEnable" -Recurse -Force
+        $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
     }
     
     # Remove scheduled task
@@ -145,8 +139,48 @@ if ($alreadyInstalled) {
     
     switch ($choice) {
         "3" {
-            # Restart script in uninstall mode
-            & $MyInvocation.MyCommand.Path -Uninstall
+            # Run uninstall inline
+            Write-Host "`nUninstalling..." -ForegroundColor Yellow
+            
+            # Stop running processes
+            $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.CommandLine -like "*eGPU.ps1*"}
+            if ($runningProcesses) {
+                Write-Host "  Stopping running eGPU monitor processes..." -ForegroundColor Gray
+                $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+            
+            # Remove scheduled task
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existingTask) {
+                Write-Host "  Removing scheduled task..." -ForegroundColor Gray
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                Write-Host "  ✓ Task removed" -ForegroundColor Green
+            } else {
+                Write-Host "  • Task not found (already removed)" -ForegroundColor DarkGray
+            }
+            
+            # Remove installation folder
+            if (Test-Path $installPath) {
+                Write-Host "  Removing installation folder..." -ForegroundColor Gray
+                try {
+                    Remove-Item -Path $installPath -Recurse -Force -ErrorAction Stop
+                    Write-Host "  ✓ Folder removed" -ForegroundColor Green
+                } catch {
+                    Write-Host "  ⚠ Could not remove folder automatically" -ForegroundColor Yellow
+                    Write-Host "  Please manually delete: $installPath" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  • Folder not found (already removed)" -ForegroundColor DarkGray
+            }
+            
+            Write-Host "`n========================================" -ForegroundColor Green
+            Write-Host "  Uninstall Complete!" -ForegroundColor Green
+            Write-Host "========================================`n" -ForegroundColor Green
+            
+            Write-Host "eGPU Auto-Enable has been removed from your system." -ForegroundColor White
+            Write-Host "You will need to manually enable your eGPU from Device Manager after reconnecting.`n" -ForegroundColor Gray
+            
+            pause
             exit
         }
         "4" {
@@ -155,36 +189,26 @@ if ($alreadyInstalled) {
             exit
         }
         "2" {
-            Write-Host "`nUninstalling existing installation..." -ForegroundColor Yellow
-            & $MyInvocation.MyCommand.Path -Uninstall
+            Write-Host "`nReinstalling..." -ForegroundColor Yellow
+            
+            # Remove existing task
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existingTask) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+            }
+            
+            # Remove existing files
+            if (Test-Path $installPath) {
+                Remove-Item -Path $installPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            
+            Write-Host "✓ Existing installation removed" -ForegroundColor Green
             Write-Host "`nStarting fresh installation..." -ForegroundColor Green
             Start-Sleep -Seconds 2
             Clear-Host
             Write-Host "========================================" -ForegroundColor Cyan
             Write-Host "  eGPU Auto-Enable INSTALLER" -ForegroundColor Cyan
             Write-Host "========================================`n" -ForegroundColor Cyan
-        }
-        "5" {
-            Write-Host "`nCreating backup..." -ForegroundColor Green
-            $backupPath = Join-Path $env:USERPROFILE "Desktop\egpu-config-backup.json"
-            Copy-Item $configPath $backupPath
-            Write-Host "Configuration backed up to: $backupPath" -ForegroundColor Green
-            pause
-        }
-        "6" {
-            $backupPath = Read-Host "Enter path to backup file"
-            if (Test-Path $backupPath) {
-                try {
-                    $backupConfig = Get-Content $backupPath | ConvertFrom-Json
-                    $backupConfig | ConvertTo-Json | Set-Content $configPath
-                    Write-Host "Configuration restored successfully!" -ForegroundColor Green
-                } catch {
-                    Write-Host "Failed to restore configuration: $_" -ForegroundColor Red
-                }
-            } else {
-                Write-Host "Backup file not found!" -ForegroundColor Red
-            }
-            pause
         }
         default {
             Write-Host "`nReconfiguring..." -ForegroundColor Green
@@ -261,26 +285,49 @@ $config = @{
     eGPU_Name = $selectedGPU.FriendlyName
     eGPU_InstanceID = $selectedGPU.InstanceId
     ConfiguredDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    InstalledVersion = "1.0"
+    InstalledVersion = "1.0.0"
+    AutoUpdateCheck = $true
 }
 
 $config | ConvertTo-Json | Set-Content $configPath
 Write-Host "✓ Configuration saved" -ForegroundColor Green
 
 # Download or copy the monitor script
-$currentScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$sourceMonitorScript = Join-Path $currentScriptDir "eGPU.ps1"
+$sourceMonitorScriptUrl = "https://raw.githubusercontent.com/Bananz0/eGPUae/main/eGPU.ps1"
 
-if (Test-Path $sourceMonitorScript) {
+# Try to get from local directory first (if installer was run as a file)
+$currentScriptDir = if ($MyInvocation.MyCommand.Path) { 
+    Split-Path -Parent $MyInvocation.MyCommand.Path 
+} else { 
+    $null 
+}
+
+$sourceMonitorScript = if ($currentScriptDir) { 
+    Join-Path $currentScriptDir "eGPU.ps1" 
+} else { 
+    $null 
+}
+
+if ($sourceMonitorScript -and (Test-Path $sourceMonitorScript)) {
     # Copy from local directory
-    Write-Host "✓ Copying monitor script..." -ForegroundColor Green
+    Write-Host "✓ Copying monitor script from local directory..." -ForegroundColor Green
     Copy-Item -Path $sourceMonitorScript -Destination $monitorScriptPath -Force
 } else {
-    Write-Host "⚠ eGPU.ps1 not found in current directory" -ForegroundColor Yellow
-    Write-Host "Please ensure eGPU.ps1 is in the same folder as the installer, or" -ForegroundColor Yellow
-    Write-Host "download it manually to: $installPath" -ForegroundColor Yellow
-    pause
-    exit
+    # Download from GitHub
+    Write-Host "✓ Downloading monitor script from GitHub..." -ForegroundColor Green
+    try {
+        $webClient = New-Object System.Net.WebClient
+        $webClient.DownloadFile($sourceMonitorScriptUrl, $monitorScriptPath)
+        Write-Host "✓ Downloaded successfully" -ForegroundColor Green
+    } catch {
+        Write-Host "⚠ Failed to download eGPU.ps1 from GitHub" -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
+        Write-Host "`nPlease manually download eGPU.ps1 from:" -ForegroundColor Yellow
+        Write-Host "  https://github.com/Bananz0/eGPUae/blob/main/eGPU.ps1" -ForegroundColor Yellow
+        Write-Host "And place it in: $installPath" -ForegroundColor Yellow
+        pause
+        exit
+    }
 }
 
 Write-Host "✓ Monitor script installed" -ForegroundColor Green
@@ -345,18 +392,21 @@ Write-Host "  Start-ScheduledTask -TaskName '$taskName'" -ForegroundColor Gray
 Write-Host "`nView logs/config folder:" -ForegroundColor Yellow
 Write-Host "  explorer `"$installPath`"" -ForegroundColor Gray
 
+Write-Host "`nView latest log entries:" -ForegroundColor Yellow
+Write-Host "  Get-Content `"$installPath\egpu-manager.log`" -Tail 50" -ForegroundColor Gray
+
 Write-Host "`nReconfigure (change eGPU):" -ForegroundColor Yellow
-Write-Host "  pwsh -File `"$($MyInvocation.MyCommand.Path)`"" -ForegroundColor Gray
+Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
 
 Write-Host "`nUninstall:" -ForegroundColor Yellow
-Write-Host "  pwsh -File `"$($MyInvocation.MyCommand.Path)`" -Uninstall" -ForegroundColor Gray
+Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
+Write-Host "  # Then choose option [3] Uninstall" -ForegroundColor DarkGray
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  One-Line Remote Install" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "`nTo install on another machine, run this as Admin:" -ForegroundColor Yellow
-Write-Host "  irm https://github.com/Bananz0/eGPUae/blob/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
-Write-Host "`n(Host both eGPU.ps1 and this installer on GitHub/web)" -ForegroundColor DarkGray
+Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Gray
 
 Write-Host "`n"
 $testNow = Read-Host "Would you like to test the monitor now in this window? (Y/N)"
