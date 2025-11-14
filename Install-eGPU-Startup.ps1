@@ -572,10 +572,19 @@ Write-Host "  - Automatically switches when eGPU connects/disconnects" -Foregrou
 $createPowerPlan = Read-Host "`nCreate eGPU power plan? (Y/N)"
 
 $eGPUPowerPlanGuid = $null
+$originalPowerPlanGuid = $null
+
 if ($createPowerPlan -like "y*") {
     Write-Host "`nCreating eGPU High Performance power plan..." -ForegroundColor Yellow
     
     try {
+        # Save the current active power plan before creating eGPU plan
+        $currentPlan = powercfg -GETACTIVESCHEME
+        if ($currentPlan -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
+            $originalPowerPlanGuid = $Matches[1]
+            Write-Host "  Current power plan saved: $originalPowerPlanGuid" -ForegroundColor DarkGray
+        }
+        
         # Check if plan already exists
         $existingPlan = powercfg -list | Select-String "eGPU High Performance"
         if ($existingPlan) {
@@ -666,6 +675,11 @@ if ($null -ne $lidActionValue) {
 # Add eGPU power plan GUID if created
 if ($null -ne $eGPUPowerPlanGuid) {
     $config.eGPUPowerPlanGuid = $eGPUPowerPlanGuid
+}
+
+# Add original power plan GUID to restore to
+if ($null -ne $originalPowerPlanGuid) {
+    $config.OriginalPowerPlanGuid = $originalPowerPlanGuid
 }
 
 $config | ConvertTo-Json | Set-Content $configPath

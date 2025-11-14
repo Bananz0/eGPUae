@@ -55,6 +55,7 @@ $userLidCloseAction = $null
 $savedPowerPlan = $null
 $powerPlanManaged = $false
 $eGPUPowerPlanGuid = $null
+$originalPowerPlanGuid = $null  # Original plan from before eGPU plan was created
 # =========================
 
 # Save runtime state for crash recovery
@@ -398,10 +399,16 @@ function Set-PowerPlan {
                     if ($currentPlanGuid -eq $script:eGPUPowerPlanGuid) {
                         Write-Log "Already using eGPU power plan" "INFO"
                         $script:powerPlanManaged = $true
-                        # But we need to know what to restore to - check runtime state or use a default
+                        # Priority: runtime state > original plan from config > Balanced default
                         if ($null -eq $script:savedPowerPlan) {
-                            # Try to get a sensible default (Balanced plan GUID)
-                            $script:savedPowerPlan = "381b4222-f694-41f0-9685-ff5bb260df2e"
+                            if ($null -ne $script:originalPowerPlanGuid) {
+                                $script:savedPowerPlan = $script:originalPowerPlanGuid
+                                Write-Log "Will restore to original plan from config" "INFO"
+                            } else {
+                                # Fallback to Balanced plan GUID
+                                $script:savedPowerPlan = "381b4222-f694-41f0-9685-ff5bb260df2e"
+                                Write-Log "Will restore to Balanced plan (default)" "INFO"
+                            }
                         }
                         return $true
                     }
@@ -842,6 +849,10 @@ try {
     if ($config.PSObject.Properties.Name -contains 'eGPUPowerPlanGuid') {
         $script:eGPUPowerPlanGuid = $config.eGPUPowerPlanGuid
         Write-Log "Loaded eGPU power plan GUID: $($script:eGPUPowerPlanGuid)" "INFO"
+    }
+    if ($config.PSObject.Properties.Name -contains 'OriginalPowerPlanGuid') {
+        $script:originalPowerPlanGuid = $config.OriginalPowerPlanGuid
+        Write-Log "Loaded original power plan GUID: $($script:originalPowerPlanGuid)" "INFO"
     }
 } catch {
     Write-Host "ERROR: Could not read config file: $_" -ForegroundColor Red
