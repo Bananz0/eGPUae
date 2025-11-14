@@ -59,6 +59,23 @@ function Enable-eGPU {
         return $false
     }
     
+    Write-Host "    Device Details:" -ForegroundColor Cyan
+    Write-Host "      Name: $($egpu.FriendlyName)"
+    Write-Host "      InstanceID: $($egpu.InstanceId)"
+    Write-Host "      Status: $($egpu.Status)"
+    Write-Host "      Class: $($egpu.Class)"
+    
+    # Check if running as admin
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    Write-Host "      Running as Admin: $isAdmin" -ForegroundColor $(if ($isAdmin) { "Green" } else { "Red" })
+    
+    if (-not $isAdmin) {
+        Write-Host "    ⚠ WARNING: Script is NOT running as Administrator!" -ForegroundColor Red
+        Write-Host "    Enable-PnpDevice requires administrator privileges to work properly." -ForegroundColor Yellow
+        Write-Host "    Please restart the script as Administrator." -ForegroundColor Yellow
+        return $false
+    }
+    
     $attempt = 0
     while ($attempt -lt $MaxRetries) {
         $attempt++
@@ -69,7 +86,9 @@ function Enable-eGPU {
             }
             
             # Try to enable
+            Write-Host "    Executing: Enable-PnpDevice -InstanceId '$($egpu.InstanceId)'" -ForegroundColor Gray
             Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction Stop
+            Write-Host "    Command completed without error" -ForegroundColor Gray
             
             # Wait a moment for device to actually enable
             Start-Sleep -Milliseconds 500
@@ -79,7 +98,8 @@ function Enable-eGPU {
             if ($null -ne $egpu -and $egpu.Status -eq "OK") {
                 return $true
             } else {
-                Write-Host "    Device still shows as disabled after enable command" -ForegroundColor Yellow
+                $currentStatus = if ($null -ne $egpu) { $egpu.Status } else { "NULL" }
+                Write-Host "    Device status after enable: $currentStatus (expected: OK)" -ForegroundColor Yellow
                 if ($attempt -lt $MaxRetries) {
                     Start-Sleep -Seconds 1
                 }
