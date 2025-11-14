@@ -108,7 +108,7 @@ if ($Uninstall) {
                     Write-Host "  ✓ Power plan removed" -ForegroundColor Green
                 }
             } catch {
-                # Silently continue if config can't be read
+                Write-Error "Failed to read or process config during uninstall: $_"
             }
         }
         
@@ -154,7 +154,9 @@ if ($alreadyInstalled) {
         try {
             $config = Get-Content $configPath | ConvertFrom-Json
             $currentVersion = if ($config.InstalledVersion) { $config.InstalledVersion } else { "1.0.0" }
-        } catch {}
+        } catch {
+            Write-Error "Failed to read version from config: $_"
+        }
     }
     Write-Host "Current version: $currentVersion" -ForegroundColor Gray
     Write-Host "Installer version: $SCRIPT_VERSION" -ForegroundColor Gray

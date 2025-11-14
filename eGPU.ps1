@@ -87,7 +87,7 @@ function Save-RuntimeState {
         
         $state | ConvertTo-Json | Set-Content $runtimeStatePath -ErrorAction SilentlyContinue
     } catch {
-        # Silently fail - not critical
+        Write-Error "Failed to save runtime state: $_"
     }
 }
 
@@ -118,7 +118,7 @@ function Clear-RuntimeState {
             $state | ConvertTo-Json | Set-Content $runtimeStatePath -ErrorAction SilentlyContinue
         }
     } catch {
-        # Silently fail - not critical
+        Write-Error "Failed to clear runtime state: $_"
     }
 }
 
@@ -257,7 +257,7 @@ function Write-Log {
             Add-Content -Path $logPath -Value "[$timestamp] [INFO] Log rotated. Saved ${savedKB}KB. Kept last $maxLogLines lines."
         }
     } catch {
-        # Silently fail if logging doesn't work (don't break the script)
+        Write-Error "Failed to write log: $_"
     }
 }
 
@@ -608,7 +608,7 @@ function Show-Notification {
         Write-Log "Notification shown: $Title" "INFO"
         return
     } catch {
-        # Silently fall through to tray notification
+        Write-Log "Toast notification failed, falling back to tray: $_" "WARNING"
     }
 
     # Fallback: System tray balloon notification
@@ -628,7 +628,9 @@ function Show-Notification {
             try {
                 $Event.MessageData.Visible = $false
                 $Event.MessageData.Dispose()
-            } catch {}
+            } catch {
+                Write-Error "Failed to dispose notification icon: $_"
+            }
             Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
             Remove-Job -Id $EventSubscriber.Action.Id -Force
         } -MessageData $notify
@@ -638,7 +640,9 @@ function Show-Notification {
             try {
                 $Event.MessageData.Visible = $false
                 $Event.MessageData.Dispose()
-            } catch {}
+            } catch {
+                Write-Error "Failed to dispose notification icon on timeout: $_"
+            }
             Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
             Remove-Job -Id $EventSubscriber.Action.Id -Force
         } -MessageData $notify
