@@ -1,5 +1,9 @@
-# eGPU Auto-Start Installer (Interactive)
-# This script helps you set up automatic eGPU re-enabling at startup
+# eGPU Auto-Enable Installer/Uninstaller
+# Interactive setup for automatic eGPU re-enabling at startup
+
+param(
+    [switch]$Uninstall
+)
 
 # Check if running as administrator
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -11,10 +15,116 @@ if (-not $isAdmin) {
     exit
 }
 
+$taskName = "eGPU-AutoEnable"
+$installPath = Join-Path $env:USERPROFILE ".egpu-manager"
+$monitorScriptPath = Join-Path $installPath "eGPU.ps1"
+$configPath = Join-Path $installPath "egpu-config.json"
+
+# ==================== UNINSTALL MODE ====================
+if ($Uninstall) {
+    Clear-Host
+    Write-Host "========================================" -ForegroundColor Red
+    Write-Host "  eGPU Auto-Enable UNINSTALLER" -ForegroundColor Red
+    Write-Host "========================================`n" -ForegroundColor Red
+    
+    Write-Host "This will remove:" -ForegroundColor Yellow
+    Write-Host "  • Scheduled task: $taskName" -ForegroundColor Gray
+    Write-Host "  • Installation folder: $installPath" -ForegroundColor Gray
+    Write-Host ""
+    
+    $confirm = Read-Host "Are you sure you want to uninstall? (Y/N)"
+    
+    if ($confirm -notlike "y*") {
+        Write-Host "`nUninstall cancelled." -ForegroundColor Yellow
+        pause
+        exit
+    }
+    
+    Write-Host "`nUninstalling..." -ForegroundColor Yellow
+    
+    # Remove scheduled task
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Host "  Removing scheduled task..." -ForegroundColor Gray
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Write-Host "  ✓ Task removed" -ForegroundColor Green
+    } else {
+        Write-Host "  • Task not found (already removed)" -ForegroundColor DarkGray
+    }
+    
+    # Remove installation folder
+    if (Test-Path $installPath) {
+        Write-Host "  Removing installation folder..." -ForegroundColor Gray
+        try {
+            Remove-Item -Path $installPath -Recurse -Force -ErrorAction Stop
+            Write-Host "  ✓ Folder removed" -ForegroundColor Green
+        } catch {
+            Write-Host "  ⚠ Could not remove folder automatically" -ForegroundColor Yellow
+            Write-Host "  Please manually delete: $installPath" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  • Folder not found (already removed)" -ForegroundColor DarkGray
+    }
+    
+    Write-Host "`n========================================" -ForegroundColor Green
+    Write-Host "  Uninstall Complete!" -ForegroundColor Green
+    Write-Host "========================================`n" -ForegroundColor Green
+    
+    Write-Host "eGPU Auto-Enable has been removed from your system." -ForegroundColor White
+    Write-Host "You will need to manually enable your eGPU from Device Manager after reconnecting.`n" -ForegroundColor Gray
+    
+    pause
+    exit
+}
+
+# ==================== INSTALL MODE ====================
 Clear-Host
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  eGPU Auto-Enable Installer" -ForegroundColor Cyan
+Write-Host "  eGPU Auto-Enable INSTALLER" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
+
+Write-Host "Installation location: $installPath`n" -ForegroundColor Gray
+
+# Check if already installed
+$alreadyInstalled = (Test-Path $installPath) -or (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)
+
+if ($alreadyInstalled) {
+    Write-Host "⚠ eGPU Auto-Enable is already installed!" -ForegroundColor Yellow
+    Write-Host "`nWhat would you like to do?" -ForegroundColor Cyan
+    Write-Host "  [1] Reconfigure (select different eGPU)" -ForegroundColor Gray
+    Write-Host "  [2] Reinstall (fresh installation)" -ForegroundColor Gray
+    Write-Host "  [3] Uninstall" -ForegroundColor Gray
+    Write-Host "  [4] Cancel" -ForegroundColor Gray
+    Write-Host ""
+    
+    $choice = Read-Host "Enter choice [1-4]"
+    
+    switch ($choice) {
+        "3" {
+            # Restart script in uninstall mode
+            & $MyInvocation.MyCommand.Path -Uninstall
+            exit
+        }
+        "4" {
+            Write-Host "`nCancelled." -ForegroundColor Yellow
+            pause
+            exit
+        }
+        "2" {
+            Write-Host "`nUninstalling existing installation..." -ForegroundColor Yellow
+            & $MyInvocation.MyCommand.Path -Uninstall
+            Write-Host "`nStarting fresh installation..." -ForegroundColor Green
+            Start-Sleep -Seconds 2
+            Clear-Host
+            Write-Host "========================================" -ForegroundColor Cyan
+            Write-Host "  eGPU Auto-Enable INSTALLER" -ForegroundColor Cyan
+            Write-Host "========================================`n" -ForegroundColor Cyan
+        }
+        default {
+            Write-Host "`nReconfiguring..." -ForegroundColor Green
+        }
+    }
+}
 
 # Step 1: Detect all display adapters
 Write-Host "Scanning for graphics devices...`n" -ForegroundColor Yellow
@@ -73,57 +183,61 @@ if ($confirm -notlike "y*") {
     exit
 }
 
-# Step 3: Save configuration
-Write-Host "`nSaving eGPU configuration..." -ForegroundColor Yellow
+# Step 3: Create installation directory and save files
+Write-Host "`nSetting up installation..." -ForegroundColor Yellow
 
+if (-not (Test-Path $installPath)) {
+    New-Item -Path $installPath -ItemType Directory -Force | Out-Null
+}
+
+# Save configuration
 $config = @{
     eGPU_Name = $selectedGPU.FriendlyName
     eGPU_InstanceID = $selectedGPU.InstanceId
     ConfiguredDate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    InstalledVersion = "1.0"
 }
 
-$scriptFolder = Split-Path -Parent $MyInvocation.MyCommand.Path
-$configPath = Join-Path $scriptFolder "egpu-config.json"
 $config | ConvertTo-Json | Set-Content $configPath
+Write-Host "✓ Configuration saved" -ForegroundColor Green
 
-Write-Host "✓ Configuration saved to: $configPath" -ForegroundColor Green
+# Download or copy the monitor script
+$currentScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$sourceMonitorScript = Join-Path $currentScriptDir "eGPU.ps1"
 
-# Step 4: Locate the monitoring script
-$monitorScriptPath = Join-Path $scriptFolder "eGPU.ps1"
-
-if (-not (Test-Path $monitorScriptPath)) {
-    Write-Host "`nERROR: eGPU.ps1 not found in the same folder!" -ForegroundColor Red
-    Write-Host "Expected location: $monitorScriptPath" -ForegroundColor Yellow
-    Write-Host "`nPlease ensure both scripts are in the same folder:" -ForegroundColor Yellow
-    Write-Host "  - Install-eGPU-Startup.ps1 (this script)" -ForegroundColor Gray
-    Write-Host "  - eGPU.ps1 (the monitoring script)" -ForegroundColor Gray
+if (Test-Path $sourceMonitorScript) {
+    # Copy from local directory
+    Write-Host "✓ Copying monitor script..." -ForegroundColor Green
+    Copy-Item -Path $sourceMonitorScript -Destination $monitorScriptPath -Force
+} else {
+    Write-Host "⚠ eGPU.ps1 not found in current directory" -ForegroundColor Yellow
+    Write-Host "Please ensure eGPU.ps1 is in the same folder as the installer, or" -ForegroundColor Yellow
+    Write-Host "download it manually to: $installPath" -ForegroundColor Yellow
     pause
     exit
 }
 
-Write-Host "✓ Found monitoring script: $monitorScriptPath" -ForegroundColor Green
+Write-Host "✓ Monitor script installed" -ForegroundColor Green
 
-# Step 5: Create scheduled task
-Write-Host "`nCreating startup task..." -ForegroundColor Yellow
-
-$taskName = "eGPU-AutoEnable"
-$taskDescription = "Automatically enables $($selectedGPU.FriendlyName) after physical reconnection"
+# Step 4: Create scheduled task
+Write-Host "✓ Creating startup task..." -ForegroundColor Green
 
 # Remove existing task if it exists
 $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existingTask) {
-    Write-Host "Removing existing task..." -ForegroundColor Gray
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
-# Create the action (run PowerShell with the script, hidden window)
+$taskDescription = "Automatically enables $($selectedGPU.FriendlyName) after physical reconnection"
+
+# Create the action
 $action = New-ScheduledTaskAction -Execute "pwsh.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$monitorScriptPath`""
 
-# Create the trigger (at startup, with 10 second delay to let system stabilize)
+# Create the trigger (at startup, with 10 second delay)
 $trigger = New-ScheduledTaskTrigger -AtStartup
-$trigger.Delay = "PT10S"  # 10 second delay
+$trigger.Delay = "PT10S"
 
-# Create principal (run with highest privileges)
+# Create principal
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
 
 # Create settings
@@ -132,24 +246,23 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 # Register the task
 Register-ScheduledTask -TaskName $taskName -Description $taskDescription -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
 
-Write-Host "✓ Scheduled task created successfully!" -ForegroundColor Green
+Write-Host "✓ Scheduled task created" -ForegroundColor Green
 
-# Step 6: Test the task
-Write-Host "`n========================================" -ForegroundColor Cyan
+# Step 5: Show completion info
+Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "  Installation Complete!" -ForegroundColor Green
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Green
 
 Write-Host "`nConfiguration:" -ForegroundColor Cyan
 Write-Host "  eGPU: $($selectedGPU.FriendlyName)" -ForegroundColor White
-Write-Host "  Script: $monitorScriptPath" -ForegroundColor Gray
+Write-Host "  Location: $installPath" -ForegroundColor Gray
 Write-Host "  Task: $taskName" -ForegroundColor Gray
 Write-Host "  Startup: Automatic (10 second delay)" -ForegroundColor Gray
 
-Write-Host "`nThe eGPU monitor will now start automatically when Windows boots." -ForegroundColor White
 Write-Host "`nYour workflow:" -ForegroundColor Cyan
 Write-Host "  1. Safe-remove eGPU in NVIDIA Control Panel" -ForegroundColor Gray
 Write-Host "  2. Physically unplug the eGPU" -ForegroundColor Gray
-Write-Host "  3. Plug it back in → Automatically enables!" -ForegroundColor Green
+Write-Host "  3. Plug it back in → Automatically enables! ✓" -ForegroundColor Green
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  Quick Commands" -ForegroundColor Cyan
@@ -161,14 +274,21 @@ Write-Host "  pwsh `"$monitorScriptPath`"" -ForegroundColor Gray
 Write-Host "`nStart the background task now:" -ForegroundColor Yellow
 Write-Host "  Start-ScheduledTask -TaskName '$taskName'" -ForegroundColor Gray
 
-Write-Host "`nView task in Task Scheduler:" -ForegroundColor Yellow
-Write-Host "  taskschd.msc" -ForegroundColor Gray
+Write-Host "`nView logs/config folder:" -ForegroundColor Yellow
+Write-Host "  explorer `"$installPath`"" -ForegroundColor Gray
 
-Write-Host "`nUninstall (remove task):" -ForegroundColor Yellow
-Write-Host "  Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false" -ForegroundColor Gray
+Write-Host "`nReconfigure (change eGPU):" -ForegroundColor Yellow
+Write-Host "  pwsh -File `"$($MyInvocation.MyCommand.Path)`"" -ForegroundColor Gray
 
-Write-Host "`nReconfigure (run installer again):" -ForegroundColor Yellow
-Write-Host "  pwsh `"$($MyInvocation.MyCommand.Path)`"" -ForegroundColor Gray
+Write-Host "`nUninstall:" -ForegroundColor Yellow
+Write-Host "  pwsh -File `"$($MyInvocation.MyCommand.Path)`" -Uninstall" -ForegroundColor Gray
+
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  One-Line Remote Install" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "`nTo install on another machine, run this as Admin:" -ForegroundColor Yellow
+Write-Host "  irm YOUR_URL/Install.ps1 | iex" -ForegroundColor Gray
+Write-Host "`n(Host both eGPU.ps1 and this installer on GitHub/web)" -ForegroundColor DarkGray
 
 Write-Host "`n"
 $testNow = Read-Host "Would you like to test the monitor now in this window? (Y/N)"
@@ -180,5 +300,6 @@ if ($testNow -like "y*") {
     & pwsh -File $monitorScriptPath
 } else {
     Write-Host "`nDone! The monitor will start automatically on next boot." -ForegroundColor Green
+    Write-Host "Or start it now with: Start-ScheduledTask -TaskName '$taskName'`n" -ForegroundColor Gray
     pause
 }
