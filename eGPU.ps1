@@ -80,34 +80,64 @@ function Enable-eGPU {
     while ($attempt -lt $MaxRetries) {
         $attempt++
         
+        if ($attempt -gt 1) {
+            Write-Host "    Retry attempt $attempt/$MaxRetries..." -ForegroundColor Yellow
+        }
+        
         try {
-            if ($attempt -gt 1) {
-                Write-Host "    Retry attempt $attempt/$MaxRetries..." -ForegroundColor Yellow
-            }
-            
-            # Try to enable
-            Write-Host "    Executing: Enable-PnpDevice -InstanceId '$($egpu.InstanceId)'" -ForegroundColor Gray
+            # Method 1: Try PowerShell cmdlet first
+            Write-Host "    Method 1: Using Enable-PnpDevice..." -ForegroundColor Gray
             Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction Stop
-            Write-Host "    Command completed without error" -ForegroundColor Gray
+            Start-Sleep -Milliseconds 800
             
-            # Wait a moment for device to actually enable
-            Start-Sleep -Milliseconds 500
-            
-            # Verify it actually enabled
+            # Check if it worked
             $egpu = Get-eGPUDevice
             if ($null -ne $egpu -and $egpu.Status -eq "OK") {
+                Write-Host "    ✓ Method 1 succeeded" -ForegroundColor Green
                 return $true
-            } else {
-                $currentStatus = if ($null -ne $egpu) { $egpu.Status } else { "NULL" }
-                Write-Host "    Device status after enable: $currentStatus (expected: OK)" -ForegroundColor Yellow
-                if ($attempt -lt $MaxRetries) {
-                    Start-Sleep -Seconds 1
+            }
+            
+            # Method 2: Try using DevCon-style WMI approach
+            Write-Host "    Method 1 didn't work, trying Method 2: WMI approach..." -ForegroundColor Gray
+            $instanceIdEscaped = $egpu.InstanceId -replace '\\', '\\'
+            $device = Get-WmiObject -Class Win32_PnPEntity | Where-Object { $_.DeviceID -eq $egpu.InstanceId }
+            
+            if ($device) {
+                $result = $device.Enable()
+                Write-Host "    WMI Enable result: $($result.ReturnValue)" -ForegroundColor Gray
+                Start-Sleep -Milliseconds 800
+                
+                $egpu = Get-eGPUDevice
+                if ($null -ne $egpu -and $egpu.Status -eq "OK") {
+                    Write-Host "    ✓ Method 2 succeeded" -ForegroundColor Green
+                    return $true
                 }
             }
+            
+            # Method 3: Try restarting the device (disable then enable)
+            Write-Host "    Methods 1-2 didn't work, trying Method 3: Restart device..." -ForegroundColor Gray
+            Disable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+            Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 800
+            
+            $egpu = Get-eGPUDevice
+            if ($null -ne $egpu -and $egpu.Status -eq "OK") {
+                Write-Host "    ✓ Method 3 succeeded" -ForegroundColor Green
+                return $true
+            }
+            
+            $currentStatus = if ($null -ne $egpu) { $egpu.Status } else { "NULL" }
+            Write-Host "    All methods failed. Status: $currentStatus" -ForegroundColor Yellow
+            
+            if ($attempt -lt $MaxRetries) {
+                Start-Sleep -Seconds 2
+            }
+            
         } catch {
             Write-Host "    ERROR on attempt $attempt : $_" -ForegroundColor Red
             if ($attempt -lt $MaxRetries) {
-                Start-Sleep -Seconds 1
+                Start-Sleep -Seconds 2
             }
         }
     }
