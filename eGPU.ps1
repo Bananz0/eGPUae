@@ -146,6 +146,27 @@ while ($true) {
             Write-Host "`n    >>> eGPU ENABLED (manually or by another process) <<<" -ForegroundColor Green
             Write-Host ""
         }
+        # NEW: Handle transition through "unknown" state during physical reconnection
+        elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "present-unknown") {
+            Write-Host "`n    >>> eGPU RECONNECTING (detected hardware change) <<<" -ForegroundColor Yellow
+            Write-Host "    Waiting for device to stabilize...`n"
+        }
+        elseif ($script:lastKnownState -eq "present-unknown" -and $currentState -eq "present-disabled") {
+            Write-Host "`n    >>> eGPU RECONNECTION COMPLETE <<<" -ForegroundColor Yellow
+            Write-Host "    Status: Device reconnected but disabled"
+            Write-Host "    Action: Enabling eGPU..." -ForegroundColor Green
+            
+            # Wait a moment for device to fully initialize
+            Start-Sleep -Seconds 1
+            
+            if (Enable-eGPU) {
+                Write-Host "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
+                $currentState = "present-ok"  # Update state after enabling
+            } else {
+                Write-Host "    ✗ Failed to enable eGPU" -ForegroundColor Red
+            }
+            Write-Host ""
+        }
     }
     
     # Heartbeat every 30 seconds to show script is still running
