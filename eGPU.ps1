@@ -50,17 +50,48 @@ function Get-eGPUDevice {
 }
 
 function Enable-eGPU {
+    param([int]$MaxRetries = 3)
+    
     $egpu = Get-eGPUDevice
     
-    if ($null -ne $egpu) {
+    if ($null -eq $egpu) {
+        Write-Host "    ERROR: eGPU device not found" -ForegroundColor Red
+        return $false
+    }
+    
+    $attempt = 0
+    while ($attempt -lt $MaxRetries) {
+        $attempt++
+        
         try {
+            if ($attempt -gt 1) {
+                Write-Host "    Retry attempt $attempt/$MaxRetries..." -ForegroundColor Yellow
+            }
+            
+            # Try to enable
             Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction Stop
-            return $true
+            
+            # Wait a moment for device to actually enable
+            Start-Sleep -Milliseconds 500
+            
+            # Verify it actually enabled
+            $egpu = Get-eGPUDevice
+            if ($null -ne $egpu -and $egpu.Status -eq "OK") {
+                return $true
+            } else {
+                Write-Host "    Device still shows as disabled after enable command" -ForegroundColor Yellow
+                if ($attempt -lt $MaxRetries) {
+                    Start-Sleep -Seconds 1
+                }
+            }
         } catch {
-            Write-Host "    ERROR: Failed to enable - $_" -ForegroundColor Red
-            return $false
+            Write-Host "    ERROR on attempt $attempt : $_" -ForegroundColor Red
+            if ($attempt -lt $MaxRetries) {
+                Start-Sleep -Seconds 1
+            }
         }
     }
+    
     return $false
 }
 
@@ -156,14 +187,25 @@ while ($true) {
             Write-Host "    Status: Device reconnected but disabled"
             Write-Host "    Action: Enabling eGPU..." -ForegroundColor Green
             
-            # Wait a moment for device to fully initialize
-            Start-Sleep -Seconds 1
+            # Wait for device to fully stabilize
+            Start-Sleep -Seconds 2
             
-            if (Enable-eGPU) {
+            $enableResult = Enable-eGPU -MaxRetries 5
+            
+            if ($enableResult) {
                 Write-Host "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
-                $currentState = "present-ok"  # Update state after enabling
+                # Force a state refresh to confirm
+                Start-Sleep -Seconds 1
+                $currentState = Get-eGPUState
+                if ($currentState -eq "present-ok") {
+                    Write-Host "    ✓ Verified: eGPU is now active and operational" -ForegroundColor Green
+                } else {
+                    Write-Host "    ⚠ Warning: Enable command succeeded but device still shows as: $currentState" -ForegroundColor Yellow
+                    Write-Host "    This may require manual intervention or a driver restart" -ForegroundColor Yellow
+                }
             } else {
-                Write-Host "    ✗ Failed to enable eGPU" -ForegroundColor Red
+                Write-Host "    ✗ FAILED to enable eGPU after multiple attempts" -ForegroundColor Red
+                Write-Host "    You may need to enable it manually from Device Manager" -ForegroundColor Yellow
             }
             Write-Host ""
         }
