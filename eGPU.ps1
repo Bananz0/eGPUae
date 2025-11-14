@@ -71,8 +71,6 @@ function Enable-eGPU {
     
     if (-not $isAdmin) {
         Write-Host "    ⚠ WARNING: Script is NOT running as Administrator!" -ForegroundColor Red
-        Write-Host "    Enable-PnpDevice requires administrator privileges to work properly." -ForegroundColor Yellow
-        Write-Host "    Please restart the script as Administrator." -ForegroundColor Yellow
         return $false
     }
     
@@ -85,45 +83,52 @@ function Enable-eGPU {
         }
         
         try {
-            # Method 1: Try PowerShell cmdlet first
-            Write-Host "    Method 1: Using Enable-PnpDevice..." -ForegroundColor Gray
+            # Method 1: Standard PowerShell cmdlet
+            Write-Host "    Method 1: Enable-PnpDevice..." -ForegroundColor Gray
             Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction Stop
-            Start-Sleep -Milliseconds 800
+            Start-Sleep -Seconds 1
             
-            # Check if it worked
             $egpu = Get-eGPUDevice
             if ($null -ne $egpu -and $egpu.Status -eq "OK") {
-                Write-Host "    ✓ Method 1 succeeded" -ForegroundColor Green
+                Write-Host "    ✓ Method 1 succeeded!" -ForegroundColor Green
                 return $true
             }
             
-            # Method 2: Try using DevCon-style WMI approach
-            Write-Host "    Method 1 didn't work, trying Method 2: WMI approach..." -ForegroundColor Gray
-            $instanceIdEscaped = $egpu.InstanceId -replace '\\', '\\'
-            $device = Get-WmiObject -Class Win32_PnPEntity | Where-Object { $_.DeviceID -eq $egpu.InstanceId }
-            
-            if ($device) {
-                $result = $device.Enable()
-                Write-Host "    WMI Enable result: $($result.ReturnValue)" -ForegroundColor Gray
-                Start-Sleep -Milliseconds 800
-                
-                $egpu = Get-eGPUDevice
-                if ($null -ne $egpu -and $egpu.Status -eq "OK") {
-                    Write-Host "    ✓ Method 2 succeeded" -ForegroundColor Green
-                    return $true
-                }
-            }
-            
-            # Method 3: Try restarting the device (disable then enable)
-            Write-Host "    Methods 1-2 didn't work, trying Method 3: Restart device..." -ForegroundColor Gray
+            # Method 2: Restart device (disable then enable with longer delay)
+            Write-Host "    Method 2: Restarting device (disable + enable)..." -ForegroundColor Gray
             Disable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Seconds 1
             Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 800
+            Start-Sleep -Seconds 2
             
             $egpu = Get-eGPUDevice
             if ($null -ne $egpu -and $egpu.Status -eq "OK") {
-                Write-Host "    ✓ Method 3 succeeded" -ForegroundColor Green
+                Write-Host "    ✓ Method 2 succeeded!" -ForegroundColor Green
+                return $true
+            }
+            
+            # Method 3: Use pnputil to rescan hardware
+            Write-Host "    Method 3: Triggering hardware rescan..." -ForegroundColor Gray
+            $rescanResult = & pnputil /scan-devices 2>&1
+            Start-Sleep -Seconds 2
+            Enable-PnpDevice -InstanceId $egpu.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            
+            $egpu = Get-eGPUDevice
+            if ($null -ne $egpu -and $egpu.Status -eq "OK") {
+                Write-Host "    ✓ Method 3 succeeded!" -ForegroundColor Green
+                return $true
+            }
+            
+            # Method 4: Use devcon-style command via pnputil
+            Write-Host "    Method 4: Using pnputil enable..." -ForegroundColor Gray
+            $enableResult = & pnputil /enable-device "$($egpu.InstanceId)" 2>&1
+            Write-Host "    pnputil output: $enableResult" -ForegroundColor Gray
+            Start-Sleep -Seconds 2
+            
+            $egpu = Get-eGPUDevice
+            if ($null -ne $egpu -and $egpu.Status -eq "OK") {
+                Write-Host "    ✓ Method 4 succeeded!" -ForegroundColor Green
                 return $true
             }
             
@@ -131,13 +136,13 @@ function Enable-eGPU {
             Write-Host "    All methods failed. Status: $currentStatus" -ForegroundColor Yellow
             
             if ($attempt -lt $MaxRetries) {
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 3
             }
             
         } catch {
             Write-Host "    ERROR on attempt $attempt : $_" -ForegroundColor Red
             if ($attempt -lt $MaxRetries) {
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 3
             }
         }
     }
