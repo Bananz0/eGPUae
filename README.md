@@ -1,4 +1,4 @@
-# eGPU Auto-Enable 🚀
+# eGPU Auto-Enabler
 
 **Automatically re-enable your eGPU after hot-plugging on Windows**
 
@@ -10,25 +10,25 @@ Never manually enable your eGPU from Device Manager again! This tool monitors yo
 
 ---
 
-## 🎯 Problem
+## Problem
 
 When using an external GPU (eGPU) via Thunderbolt/USB-C on Windows:
 1. You "safely remove" it using NVIDIA Control Panel (or Device Manager)
 2. You physically disconnect the eGPU
-3. When you plug it back in... **it stays disabled** 😤
+3. When you plug it back in... **it stays disabled** 
 4. You have to manually open Device Manager and enable it every time
 
-## ✨ Solution
+## Solution
 
 This tool runs silently in the background and:
-- ✅ Detects when you safe-remove your eGPU
-- ✅ Waits for you to unplug and replug it
-- ✅ **Automatically enables it** when reconnected!
-- ✅ Logs all activity with automatic rotation (max 500 KB)
+- Detects when you safe-remove your eGPU
+- Waits for you to unplug and replug it
+- **Automatically enables it** when reconnected!
+- Logs all activity with automatic rotation (max 500 KB)
 
 ---
 
-## 🚀 Quick Install
+## Quick Install
 
 ### One-Line Install (Recommended)
 
@@ -55,7 +55,7 @@ irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.p
 
 ---
 
-## 📋 Requirements
+## Requirements
 
 - **Windows 10/11**
 - **PowerShell 7+** ([Download here](https://github.com/PowerShell/PowerShell/releases))
@@ -64,7 +64,7 @@ irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.p
 
 ---
 
-## 🎮 How to Use
+## How to Use
 
 ### Your New Workflow:
 
@@ -90,7 +90,7 @@ The script tracks your eGPU through three states:
 
 ---
 
-## 🛠️ Commands
+## Commands
 
 ### View Live Monitor (for testing)
 ```powershell
@@ -127,7 +127,7 @@ Or if you have the file locally:
 
 ---
 
-## 📁 Installation Details
+## Installation Details
 
 ### Files Created:
 ```
@@ -144,7 +144,7 @@ C:\Users\YourName\.egpu-manager\
 
 ---
 
-## 🔧 How It Works
+## How It Works
 
 1. **Monitoring:** The script polls your eGPU status every 2 seconds
 2. **Detection:** It detects state changes:
@@ -162,7 +162,7 @@ C:\Users\YourName\.egpu-manager\
 
 ---
 
-## ❓ FAQ
+## FAQ
 
 ### Q: Will this work with AMD GPUs?
 **A:** Yes! The script works with any external GPU. Just select your eGPU during installation.
@@ -198,7 +198,7 @@ Start-ScheduledTask -TaskName "eGPU-AutoEnable"
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### "Script must be run as Administrator"
 - Right-click PowerShell → "Run as Administrator"
@@ -222,7 +222,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Feel free to:
 - Report bugs
@@ -231,13 +231,13 @@ Contributions are welcome! Feel free to:
 
 ---
 
-## 📜 License
+## License
 
 MIT License - feel free to use, modify, and distribute!
 
 ---
 
-## 🙏 Credits
+## Credits
 
 Created to solve the annoying eGPU hot-plug workflow on Windows.
 
@@ -245,7 +245,7 @@ Inspired by the frustration of opening Device Manager every single time 😅
 
 ---
 
-## ⭐ Star This Repo!
+## Star This Repo!
 
 If this tool saved you time, consider giving it a star! ⭐
 
@@ -253,7 +253,7 @@ It helps others discover this solution and motivates further development.
 
 ---
 
-## 📞 Support
+## Support
 
 - **Issues:** [GitHub Issues](https://github.com/Bananz0/eGPUae/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/Bananz0/eGPUae/discussions)
