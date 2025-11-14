@@ -2,6 +2,86 @@
 # This script continuously monitors for eGPU physical reconnection and automatically enables it
 # Designed to run at startup and handle all eGPU hot-plug scenarios
 
+<#
+.SYNOPSIS
+    eGPU Auto-Enable Tool - Automatically re-enables eGPU after hot-plugging on Windows
+
+.DESCRIPTION
+    This tool monitors your external GPU and automatically enables it whenever you reconnect it after safe-removal.
+    It eliminates the need to manually enable the eGPU from Device Manager.
+
+.PARAMETER Uninstall
+    (Installer only) Removes the eGPU Auto-Enable tool from your system.
+
+.EXAMPLE
+    .\Install-eGPU-Startup.ps1
+    Installs the eGPU Auto-Enable tool with interactive configuration.
+
+.EXAMPLE
+    .\Install-eGPU-Startup.ps1 -Uninstall
+    Removes the eGPU Auto-Enable tool from your system.
+
+.EXAMPLE
+    irm https://raw.githubusercontent.com/YourUsername/eGPUae/main/Install-eGPU-Startup.ps1 | iex
+    Installs the eGPU Auto-Enable tool in one line.
+
+.NOTES
+    File Name      : eGPU.ps1 / Install-eGPU-Startup.ps1
+    Prerequisite   : PowerShell 7.0 or later
+    Requires Admin : Yes
+    Version        : 1.0.0
+#>
+
+ $logPath = Join-Path $installPath "egpu-manager.log"
+ $maxLogSize = 500KB
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [ConsoleColor]$Color = "White"
+    )
+    
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $logEntry = "[$timestamp] $Message"
+    
+    # Write to console
+    Write-Log $logEntry -ForegroundColor $Color
+    
+    # Write to log file
+    try {
+        # Check if log file exceeds max size and rotate if needed
+        if ((Test-Path $logPath) -and (Get-Item $logPath).Length -gt $maxLogSize) {
+            $backupPath = Join-Path $installPath "egpu-manager.backup.log"
+            Move-Item $logPath $backupPath -Force
+        }
+        
+        Add-Content -Path $logPath -Value $logEntry -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Log "Failed to write to log file: $_" -ForegroundColor Red
+    }
+}
+
+function Check-ForUpdate {
+    $currentVersion = $config.InstalledVersion
+    $updateUrl = "https://api.github.com/repos/bananz0/eGPUae/releases/latest"
+    
+    try {
+        $releaseInfo = Invoke-RestMethod -Uri $updateUrl -ErrorAction Stop
+        $latestVersion = $releaseInfo.tag_name.Trim("v")
+        
+        if ($latestVersion -gt $currentVersion) {
+            Write-Log "Update available: $latestVersion (you have $currentVersion)" -ForegroundColor Yellow
+            Write-Log "Download from: $($releaseInfo.html_url)" -ForegroundColor Yellow
+            return $true
+        }
+    } catch {
+        Write-Log "Failed to check for updates: $_" -ForegroundColor Red
+    }
+    
+    return $false
+}
+
 # ===== CONFIGURATION =====
 # Paths
 $installPath = Join-Path $env:USERPROFILE ".egpu-manager"
@@ -14,9 +94,9 @@ $pollInterval = 2
 $egpu_name = $null
 
 if (-not (Test-Path $configPath)) {
-    Write-Host "[$startupTime] ERROR: Config file not found at $configPath" -ForegroundColor Red
-    Write-Host "    Please run the installer script again to configure your eGPU." -ForegroundColor Yellow
-    Write-Host "    Exiting in 20 seconds..." -ForegroundColor Gray
+    Write-Log "[$startupTime] ERROR: Config file not found at $configPath" -ForegroundColor Red
+    Write-Log "    Please run the installer script again to configure your eGPU." -ForegroundColor Yellow
+    Write-Log "    Exiting in 20 seconds..." -ForegroundColor Gray
     Start-Sleep -Seconds 20
     exit
 }
@@ -25,17 +105,17 @@ try {
     $config = Get-Content $configPath | ConvertFrom-Json
     $egpu_name = $config.eGPU_Name
 } catch {
-    Write-Host "[$startupTime] ERROR: Could not read or parse config file $configPath" -ForegroundColor Red
-    Write-Host "    Error: $_" -ForegroundColor Red
-    Write-Host "    Exiting in 20 seconds..." -ForegroundColor Gray
+    Write-Log "[$startupTime] ERROR: Could not read or parse config file $configPath" -ForegroundColor Red
+    Write-Log "    Error: $_" -ForegroundColor Red
+    Write-Log "    Exiting in 20 seconds..." -ForegroundColor Gray
     Start-Sleep -Seconds 20
     exit
 }
 
 if ([string]::IsNullOrEmpty($egpu_name)) {
-    Write-Host "[$startupTime] ERROR: eGPU_Name is not set in $configPath" -ForegroundColor Red
-    Write-Host "    Please try re-running the installer." -ForegroundColor Yellow
-    Write-Host "    Exiting in 20 seconds..." -ForegroundColor Gray
+    Write-Log "[$startupTime] ERROR: eGPU_Name is not set in $configPath" -ForegroundColor Red
+    Write-Log "    Please try re-running the installer." -ForegroundColor Yellow
+    Write-Log "    Exiting in 20 seconds..." -ForegroundColor Gray
     Start-Sleep -Seconds 20
     exit
 }
@@ -52,28 +132,31 @@ function Get-eGPUState {
         return "absent"
     }
     
-    # Check if device is actually accessible (not just cached)
-    # A truly connected device will have a valid problem code
     try {
+        # Get multiple properties to make a more informed decision
         $problemCode = (Get-PnpDeviceProperty -InstanceId $egpu.InstanceId -KeyName "DEVPKEY_Device_ProblemCode" -ErrorAction Stop).Data
+        $devicePresence = (Get-PnpDeviceProperty -InstanceId $egpu.InstanceId -KeyName "DEVPKEY_Device_Presence" -ErrorAction SilentlyContinue).Data
         
-        # If we can query it and it's working (problem code 0) or disabled (problem code 22)
+        # More comprehensive state detection logic
         if ($egpu.Status -eq "OK") {
             return "present-ok"
         } elseif ($egpu.Status -eq "Error") {
-            # Check if it's actually there or just a ghost entry
-            # Problem code 22 = disabled, 45 = not connected
-            if ($problemCode -eq 45) {
+            if ($problemCode -eq 45 -or ($null -ne $devicePresence -and $devicePresence -eq 0)) {
                 return "absent"
-            } else {
+            } elseif ($problemCode -eq 22) {
                 return "present-disabled"
+            } else {
+                return "present-error"
             }
         } else {
-            # Treat "unknown" status as absent (device unplugged but cached)
-            return "absent"
+            # Additional check for "Unknown" status
+            if ($null -ne $devicePresence -and $devicePresence -eq 1) {
+                return "present-unknown"
+            } else {
+                return "absent"
+            }
         }
     } catch {
-        # If we can't query properties, device is likely not actually present
         return "absent"
     }
 }
@@ -88,21 +171,21 @@ function Enable-eGPU {
     $egpu = Get-eGPUDevice
     
     if ($null -eq $egpu) {
-        Write-Host "    ERROR: eGPU device not found" -ForegroundColor Red
+        Write-Log "    ERROR: eGPU device not found" -ForegroundColor Red
         return $false
     }
     
-    Write-Host "    Device Details:" -ForegroundColor Cyan
-    Write-Host "      Name: $($egpu.FriendlyName)"
-    Write-Host "      InstanceID: $($egpu.InstanceId)"
-    Write-Host "      Status: $($egpu.Status)"
+    Write-Log "    Device Details:" -ForegroundColor Cyan
+    Write-Log "      Name: $($egpu.FriendlyName)"
+    Write-Log "      InstanceID: $($egpu.InstanceId)"
+    Write-Log "      Status: $($egpu.Status)"
     
     # Check if running as admin
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    Write-Host "      Running as Admin: $isAdmin" -ForegroundColor $(if ($isAdmin) { "Green" } else { "Red" })
+    Write-Log "      Running as Admin: $isAdmin" -ForegroundColor $(if ($isAdmin) { "Green" } else { "Red" })
     
     if (-not $isAdmin) {
-        Write-Host "    ⚠ WARNING: Script is NOT running as Administrator!" -ForegroundColor Red
+        Write-Log "    ⚠ WARNING: Script is NOT running as Administrator!" -ForegroundColor Red
         return $false
     }
     
@@ -111,31 +194,31 @@ function Enable-eGPU {
         $attempt++
         
         if ($attempt -gt 1) {
-            Write-Host "    Retry attempt $attempt/$MaxRetries..." -ForegroundColor Yellow
+            Write-Log "    Retry attempt $attempt/$MaxRetries..." -ForegroundColor Yellow
         }
         
         try {
             # Use pnputil - the most reliable method
-            Write-Host "    Using pnputil to enable device..." -ForegroundColor Gray
+            Write-Log "    Using pnputil to enable device..." -ForegroundColor Gray
             $enableResult = & pnputil /enable-device "$($egpu.InstanceId)" 2>&1
-            Write-Host "    pnputil output: $enableResult" -ForegroundColor Gray
+            Write-Log "    pnputil output: $enableResult" -ForegroundColor Gray
             Start-Sleep -Seconds 2
             
             $egpu = Get-eGPUDevice
             if ($null -ne $egpu -and $egpu.Status -eq "OK") {
-                Write-Host "    ✓ Device enabled successfully!" -ForegroundColor Green
+                Write-Log "    ✓ Device enabled successfully!" -ForegroundColor Green
                 return $true
             }
             
             $currentStatus = if ($null -ne $egpu) { $egpu.Status } else { "NULL" }
-            Write-Host "    Enable attempted but status is: $currentStatus" -ForegroundColor Yellow
+            Write-Log "    Enable attempted but status is: $currentStatus" -ForegroundColor Yellow
             
             if ($attempt -lt $MaxRetries) {
                 Start-Sleep -Seconds 2
             }
             
         } catch {
-            Write-Host "    ERROR on attempt $attempt : $_" -ForegroundColor Red
+            Write-Log "    ERROR on attempt $attempt : $_" -ForegroundColor Red
             if ($attempt -lt $MaxRetries) {
                 Start-Sleep -Seconds 2
             }
@@ -146,13 +229,13 @@ function Enable-eGPU {
 }
 
 Clear-Host
-Write-Host "=======================================" -ForegroundColor Cyan
-Write-Host "  eGPU Auto Hot-Plug Manager" -ForegroundColor Cyan
-Write-Host "=======================================" -ForegroundColor Cyan
-Write-Host "eGPU: $egpu_name"
-Write-Host "Poll Interval: $pollInterval seconds"
-Write-Host "Monitoring Mode: Continuous"
-Write-Host "Press Ctrl+C to stop.`n"
+Write-Log "=======================================" -ForegroundColor Cyan
+Write-Log "  eGPU Auto Hot-Plug Manager" -ForegroundColor Cyan
+Write-Log "=======================================" -ForegroundColor Cyan
+Write-Log "eGPU: $egpu_name"
+Write-Log "Poll Interval: $pollInterval seconds"
+Write-Log "Monitoring Mode: Continuous"
+Write-Log "Press Ctrl+C to stop.`n"
 
 # Get initial state
 $script:lastKnownState = Get-eGPUState
@@ -160,19 +243,19 @@ $startupTime = Get-Date -Format 'HH:mm:ss'
 
 switch ($script:lastKnownState) {
     "present-ok" {
-        Write-Host "[$startupTime] STARTUP: eGPU connected and enabled ✓" -ForegroundColor Green
+        Write-Log "[$startupTime] STARTUP: eGPU connected and enabled ✓" -ForegroundColor Green
     }
     "present-disabled" {
-        Write-Host "[$startupTime] STARTUP: eGPU connected but disabled (safe-removed)" -ForegroundColor Yellow
-        Write-Host "    Waiting for physical reconnection to auto-enable..."
+        Write-Log "[$startupTime] STARTUP: eGPU connected but disabled (safe-removed)" -ForegroundColor Yellow
+        Write-Log "    Waiting for physical reconnection to auto-enable..."
     }
     "absent" {
-        Write-Host "[$startupTime] STARTUP: eGPU not connected" -ForegroundColor DarkGray
-        Write-Host "    Waiting for eGPU to be plugged in..."
+        Write-Log "[$startupTime] STARTUP: eGPU not connected" -ForegroundColor DarkGray
+        Write-Log "    Waiting for eGPU to be plugged in..."
     }
 }
 
-Write-Host "`n--- Monitoring started ---`n"
+Write-Log "`n--- Monitoring started ---`n"
 
 $checkCount = 0
 $lastHeartbeat = Get-Date
@@ -190,53 +273,53 @@ while ($true) {
     
     if ($stateChanged) {
         $timestamp = Get-Date -Format 'HH:mm:ss'
-        Write-Host "`n[$timestamp] STATE CHANGE DETECTED:" -ForegroundColor Cyan
-        Write-Host "    Was: $script:lastKnownState"
-        Write-Host "    Now: $currentState"
+        Write-Log "`n[$timestamp] STATE CHANGE DETECTED:" -ForegroundColor Cyan
+        Write-Log "    Was: $script:lastKnownState"
+        Write-Log "    Now: $currentState"
         
         # Handle different state transitions
         if ($script:lastKnownState -match "present" -and $currentState -eq "absent") {
-            Write-Host "`n    >>> eGPU PHYSICALLY UNPLUGGED <<<" -ForegroundColor Red
-            Write-Host "    Waiting for reconnection...`n"
+            Write-Log "`n    >>> eGPU PHYSICALLY UNPLUGGED <<<" -ForegroundColor Red
+            Write-Log "    Waiting for reconnection...`n"
         }
         elseif ($script:lastKnownState -eq "absent" -and $currentState -match "present") {
-            Write-Host "`n    >>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
+            Write-Log "`n    >>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
             
             if ($currentState -eq "present-disabled") {
-                Write-Host "    Status: Disabled (from previous safe-removal)"
-                Write-Host "    Action: Enabling eGPU..." -ForegroundColor Green
+                Write-Log "    Status: Disabled (from previous safe-removal)"
+                Write-Log "    Action: Enabling eGPU..." -ForegroundColor Green
                 
                 if (Enable-eGPU) {
-                    Write-Host "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
+                    Write-Log "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
                     $currentState = "present-ok"  # Update state after enabling
                 } else {
-                    Write-Host "    ✗ Failed to enable eGPU" -ForegroundColor Red
+                    Write-Log "    ✗ Failed to enable eGPU" -ForegroundColor Red
                 }
             }
             elseif ($currentState -eq "present-ok") {
-                Write-Host "    Status: Already enabled ✓" -ForegroundColor Green
-                Write-Host "    Action: No action needed"
+                Write-Log "    Status: Already enabled ✓" -ForegroundColor Green
+                Write-Log "    Action: No action needed"
             }
-            Write-Host ""
+            Write-Log ""
         }
         elseif ($script:lastKnownState -eq "present-ok" -and $currentState -eq "present-disabled") {
-            Write-Host "`n    >>> eGPU DISABLED (Safe-removed via NVIDIA Control Panel) <<<" -ForegroundColor Yellow
-            Write-Host "    Waiting for physical unplug/replug to auto-enable...`n"
+            Write-Log "`n    >>> eGPU DISABLED (Safe-removed via NVIDIA Control Panel) <<<" -ForegroundColor Yellow
+            Write-Log "    Waiting for physical unplug/replug to auto-enable...`n"
         }
         elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "present-ok") {
-            Write-Host "`n    >>> eGPU ENABLED (manually or by another process) <<<" -ForegroundColor Green
-            Write-Host ""
+            Write-Log "`n    >>> eGPU ENABLED (manually or by another process) <<<" -ForegroundColor Green
+            Write-Log ""
         }
         # Handle transition to absent (unknown state = unplugged)
         elseif ($script:lastKnownState -eq "present-disabled" -and $currentState -eq "absent") {
-            Write-Host "`n    >>> eGPU PHYSICALLY UNPLUGGED <<<" -ForegroundColor Red
-            Write-Host "    Waiting for reconnection...`n"
+            Write-Log "`n    >>> eGPU PHYSICALLY UNPLUGGED <<<" -ForegroundColor Red
+            Write-Log "    Waiting for reconnection...`n"
         }
         # Handle reconnection from absent back to disabled
         elseif ($script:lastKnownState -eq "absent" -and $currentState -eq "present-disabled") {
-            Write-Host "`n    >>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
-            Write-Host "    Status: Device reconnected but disabled"
-            Write-Host "    Action: Enabling eGPU..." -ForegroundColor Green
+            Write-Log "`n    >>> eGPU PHYSICALLY RECONNECTED <<<" -ForegroundColor Yellow
+            Write-Log "    Status: Device reconnected but disabled"
+            Write-Log "    Action: Enabling eGPU..." -ForegroundColor Green
             
             # Wait for device to fully stabilize
             Start-Sleep -Seconds 2
@@ -244,21 +327,21 @@ while ($true) {
             $enableResult = Enable-eGPU -MaxRetries 5
             
             if ($enableResult) {
-                Write-Host "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
+                Write-Log "    ✓ eGPU ENABLED SUCCESSFULLY!" -ForegroundColor Green
                 # Force a state refresh to confirm
                 Start-Sleep -Seconds 1
                 $currentState = Get-eGPUState
                 if ($currentState -eq "present-ok") {
-                    Write-Host "    ✓ Verified: eGPU is now active and operational" -ForegroundColor Green
+                    Write-Log "    ✓ Verified: eGPU is now active and operational" -ForegroundColor Green
                 } else {
-                    Write-Host "    ⚠ Warning: Enable command succeeded but device still shows as: $currentState" -ForegroundColor Yellow
-                    Write-Host "    This may require manual intervention or a driver restart" -ForegroundColor Yellow
+                    Write-Log "    ⚠ Warning: Enable command succeeded but device still shows as: $currentState" -ForegroundColor Yellow
+                    Write-Log "    This may require manual intervention or a driver restart" -ForegroundColor Yellow
                 }
             } else {
-                Write-Host "    ✗ FAILED to enable eGPU after multiple attempts" -ForegroundColor Red
-                Write-Host "    You may need to enable it manually from Device Manager" -ForegroundColor Yellow
+                Write-Log "    ✗ FAILED to enable eGPU after multiple attempts" -ForegroundColor Red
+                Write-Log "    You may need to enable it manually from Device Manager" -ForegroundColor Yellow
             }
-            Write-Host ""
+            Write-Log ""
         }
     }
     
@@ -272,7 +355,7 @@ while ($true) {
             default { "○" }
         }
         
-        Write-Host "[$timestamp] Heartbeat $statusEmoji - State: $currentState" -ForegroundColor DarkGray
+        Write-Log "[$timestamp] Heartbeat $statusEmoji - State: $currentState" -ForegroundColor DarkGray
         $lastHeartbeat = Get-Date
     }
     

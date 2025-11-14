@@ -1,6 +1,36 @@
 # eGPU Auto-Enable Installer/Uninstaller
 # Interactive setup for automatic eGPU re-enabling at startup
 
+<#
+.SYNOPSIS
+    eGPU Auto-Enable Tool - Automatically re-enables eGPU after hot-plugging on Windows
+
+.DESCRIPTION
+    This tool monitors your external GPU and automatically enables it whenever you reconnect it after safe-removal.
+    It eliminates the need to manually enable the eGPU from Device Manager.
+
+.PARAMETER Uninstall
+    (Installer only) Removes the eGPU Auto-Enable tool from your system.
+
+.EXAMPLE
+    .\Install-eGPU-Startup.ps1
+    Installs the eGPU Auto-Enable tool with interactive configuration.
+
+.EXAMPLE
+    .\Install-eGPU-Startup.ps1 -Uninstall
+    Removes the eGPU Auto-Enable tool from your system.
+
+.EXAMPLE
+    irm https://raw.githubusercontent.com/YourUsername/eGPUae/main/Install-eGPU-Startup.ps1 | iex
+    Installs the eGPU Auto-Enable tool in one line.
+
+.NOTES
+    File Name      : eGPU.ps1 / Install-eGPU-Startup.ps1
+    Prerequisite   : PowerShell 7.0 or later
+    Requires Admin : Yes
+    Version        : 1.0.0
+#>
+
 param(
     [switch]$Uninstall
 )
@@ -41,6 +71,20 @@ if ($Uninstall) {
     }
     
     Write-Host "`nUninstalling..." -ForegroundColor Yellow
+
+    # In the uninstall section, add these additional cleanup steps
+    # Stop any running instances of the script
+    $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.MainWindowTitle -like "*eGPU*"}
+    if ($runningProcesses) {
+        Write-Host "  Stopping running eGPU monitor processes..." -ForegroundColor Gray
+        $runningProcesses | Stop-Process -Force
+    }
+
+    # Remove registry entries if any
+    if (Test-Path "HKCU:\Software\eGPU-AutoEnable") {
+        Write-Host "  Removing registry entries..." -ForegroundColor Gray
+        Remove-Item -Path "HKCU:\Software\eGPU-AutoEnable" -Recurse -Force
+    }
     
     # Remove scheduled task
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -119,6 +163,28 @@ if ($alreadyInstalled) {
             Write-Host "========================================" -ForegroundColor Cyan
             Write-Host "  eGPU Auto-Enable INSTALLER" -ForegroundColor Cyan
             Write-Host "========================================`n" -ForegroundColor Cyan
+        }
+        "5" {
+            Write-Host "`nCreating backup..." -ForegroundColor Green
+            $backupPath = Join-Path $env:USERPROFILE "Desktop\egpu-config-backup.json"
+            Copy-Item $configPath $backupPath
+            Write-Host "Configuration backed up to: $backupPath" -ForegroundColor Green
+            pause
+        }
+        "6" {
+            $backupPath = Read-Host "Enter path to backup file"
+            if (Test-Path $backupPath) {
+                try {
+                    $backupConfig = Get-Content $backupPath | ConvertFrom-Json
+                    $backupConfig | ConvertTo-Json | Set-Content $configPath
+                    Write-Host "Configuration restored successfully!" -ForegroundColor Green
+                } catch {
+                    Write-Host "Failed to restore configuration: $_" -ForegroundColor Red
+                }
+            } else {
+                Write-Host "Backup file not found!" -ForegroundColor Red
+            }
+            pause
         }
         default {
             Write-Host "`nReconfiguring..." -ForegroundColor Green
