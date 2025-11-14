@@ -288,7 +288,6 @@ Write-Host "  One-Line Remote Install" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "`nTo install on another machine, run this as Admin:" -ForegroundColor Yellow
 Write-Host "  irm YOUR_URL/Install.ps1 | iex" -ForegroundColor Gray
-Write-Host "`n(Host both eGPU.ps1 and this installer on GitHub/web)" -ForegroundColor DarkGray
 
 Write-Host "`n"
 $testNow = Read-Host "Would you like to test the monitor now in this window? (Y/N)"
