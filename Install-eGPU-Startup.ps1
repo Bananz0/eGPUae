@@ -600,24 +600,24 @@ if ($createPowerPlan -like "y*") {
                 $eGPUPowerPlanGuid = $Matches[1]
                 
                 # Rename the power plan
-                powercfg -changename $eGPUPowerPlanGuid "eGPU High Performance" "Optimized for maximum eGPU performance" | Out-Null
+                powercfg -changename $eGPUPowerPlanGuid "eGPU High Performance" "Optimized for maximum eGPU performance" 2>&1 | Out-Null
                 
-                # Configure for maximum performance
+                # Configure for maximum performance (some settings may not be available on all systems)
                 # CPU: 100% minimum and maximum
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 | Out-Null
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
                 
                 # PCIe Link State Power Management: Off (maximum performance)
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PCIEXPRESS ASPM 0 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
                 
                 # USB selective suspend: Disabled
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_USB USBSELECTIVESUSPEND 0 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_USB USBSELECTIVESUSPEND 0 2>&1 | Out-Null
                 
                 # Hard disk: Never turn off
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_DISK DISKIDLE 0 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_DISK DISKIDLE 0 2>&1 | Out-Null
                 
                 # Display: Never turn off (will be managed by script)
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE 0 | Out-Null
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE 0 2>&1 | Out-Null
                 
                 # Only activate if eGPU is currently connected and working
                 $isEGPUConnected = $selectedGPU.Status -eq "OK"
@@ -786,14 +786,28 @@ if ($startChoice -eq "1") {
     
     # Start the task in background
     Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
     
-    # Tail the log file
-    try {
-        Get-Content -Path "$installPath\egpu-manager.log" -Wait -Tail 50
-    } catch {
-        Write-Host "`n⚠ Could not tail log file. Monitor is running in background." -ForegroundColor Yellow
-        Write-Host "View logs with: Get-Content `"$installPath\egpu-manager.log`" -Tail 50" -ForegroundColor Gray
+    # Wait for log file to be created (up to 5 seconds)
+    Write-Host "Waiting for monitor to start..." -ForegroundColor Gray
+    $waitCount = 0
+    while (-not (Test-Path "$installPath\egpu-manager.log") -and $waitCount -lt 10) {
+        Start-Sleep -Milliseconds 500
+        $waitCount++
+    }
+    
+    if (Test-Path "$installPath\egpu-manager.log") {
+        Write-Host "Monitor started, showing live log:`n" -ForegroundColor Green
+        # Tail the log file
+        try {
+            Get-Content -Path "$installPath\egpu-manager.log" -Wait -Tail 50
+        } catch {
+            Write-Host "`n⚠ Could not tail log file: $_" -ForegroundColor Yellow
+            Write-Host "View logs with: Get-Content `"$installPath\egpu-manager.log`" -Tail 50" -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "`n⚠ Monitor task started but log file not created yet" -ForegroundColor Yellow
+        Write-Host "The monitor may take a moment to initialize." -ForegroundColor Gray
+        Write-Host "View logs with: Get-Content `"$installPath\egpu-manager.log`" -Wait" -ForegroundColor Gray
     }
 } else {
     Write-Host "`n✓ Monitor will start automatically on next reboot" -ForegroundColor Green
