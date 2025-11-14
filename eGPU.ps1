@@ -779,14 +779,16 @@ function Enable-eGPU {
 
 Clear-Host
 Write-Host "=======================================" -ForegroundColor Cyan
-Write-Host "  eGPU Auto Hot-Plug Manager" -ForegroundColor Cyan
+Write-Host "  eGPU Auto Hot-Plug Manager v$SCRIPT_VERSION" -ForegroundColor Cyan
 Write-Host "=======================================" -ForegroundColor Cyan
 
 # Load configuration
 if (-not (Test-Path $configPath)) {
-    Write-Host "ERROR: Config file not found at $configPath" -ForegroundColor Red
-    Write-Host "Please run the installer script to configure your eGPU." -ForegroundColor Yellow
-    Write-Host "Exiting in 20 seconds..." -ForegroundColor Gray
+    Write-Host "`n⚠ ERROR: Configuration file not found" -ForegroundColor Red
+    Write-Host "Location: $configPath" -ForegroundColor Gray
+    Write-Host "`nPlease run the installer to set up your eGPU:" -ForegroundColor Yellow
+    Write-Host "  irm https://raw.githubusercontent.com/Bananz0/eGPUae/main/Install-eGPU-Startup.ps1 | iex" -ForegroundColor Cyan
+    Write-Host "`nExiting in 20 seconds..." -ForegroundColor Gray
     Start-Sleep -Seconds 20
     exit
 }

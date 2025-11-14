@@ -207,12 +207,26 @@ if ($alreadyInstalled) {
                 Write-Host "  Downloading Install-eGPU-Startup.ps1..." -ForegroundColor Gray
                 Invoke-WebRequest -Uri $installerUrl -OutFile $tempInstaller -ErrorAction Stop
                 
-                # Stop running monitor
+                # Stop running monitor (safely)
+                Write-Host "  Checking for running monitor..." -ForegroundColor Gray
                 $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.CommandLine -like "*eGPU.ps1*"}
                 if ($runningProcesses) {
-                    Write-Host "  Stopping running monitor..." -ForegroundColor Gray
-                    $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+                    Write-Host "  Stopping eGPU monitor gracefully..." -ForegroundColor Yellow
+                    $runningProcesses | ForEach-Object {
+                        try {
+                            $_.CloseMainWindow() | Out-Null
+                            Start-Sleep -Milliseconds 500
+                            if (-not $_.HasExited) {
+                                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                            }
+                        } catch {
+                            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                        }
+                    }
                     Start-Sleep -Seconds 2
+                    Write-Host "  ✓ Monitor stopped" -ForegroundColor Green
+                } else {
+                    Write-Host "  ✓ No running monitor detected" -ForegroundColor Green
                 }
                 
                 # Backup current config
@@ -259,29 +273,42 @@ if ($alreadyInstalled) {
         }
         "3" {
             # Reinstall
-            Write-Host "`nReinstalling..." -ForegroundColor Yellow
+            Write-Host "`n========================================" -ForegroundColor Yellow
+            Write-Host "  REINSTALLING" -ForegroundColor Yellow
+            Write-Host "========================================" -ForegroundColor Yellow
             
             # Stop processes
+            Write-Host "`n[1/3] Stopping running monitor..." -ForegroundColor Gray
             $runningProcesses = Get-Process | Where-Object {$_.ProcessName -eq "pwsh" -and $_.CommandLine -like "*eGPU.ps1*"}
             if ($runningProcesses) {
-                Write-Host "  Stopping running processes..." -ForegroundColor Gray
                 $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                Write-Host "  ✓ Stopped" -ForegroundColor Green
+            } else {
+                Write-Host "  • No running monitor" -ForegroundColor DarkGray
             }
             
             # Remove task
+            Write-Host "[2/3] Removing scheduled task..." -ForegroundColor Gray
             $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
             if ($existingTask) {
-                Write-Host "  Removing scheduled task..." -ForegroundColor Gray
                 Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                Write-Host "  ✓ Removed" -ForegroundColor Green
+            } else {
+                Write-Host "  • No task found" -ForegroundColor DarkGray
             }
             
             # Remove folder
+            Write-Host "[3/3] Removing old installation..." -ForegroundColor Gray
             if (Test-Path $installPath) {
-                Write-Host "  Removing old installation..." -ForegroundColor Gray
                 Remove-Item $installPath -Recurse -Force
+                Write-Host "  ✓ Removed" -ForegroundColor Green
+            } else {
+                Write-Host "  • No folder found" -ForegroundColor DarkGray
             }
             
-            Write-Host "  Starting fresh installation...`n" -ForegroundColor Gray
+            Write-Host "`nStarting fresh installation...`n" -ForegroundColor Green
+            Start-Sleep -Seconds 1
             # Continue to main install flow
         }
         "4" {
@@ -337,7 +364,11 @@ if ($alreadyInstalled) {
     }
 }
 
-# Step 1: Detect all display adapters
+# ==================== STEP 1: GPU SELECTION ====================
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  STEP 1: Select Your eGPU" -ForegroundColor Cyan
+Write-Host "========================================`n" -ForegroundColor Cyan
+
 Write-Host "Scanning for graphics devices...`n" -ForegroundColor Yellow
 
 $allGPUs = Get-PnpDevice -Class Display | Where-Object { 
@@ -394,17 +425,68 @@ if ($confirm -notlike "y*") {
     exit
 }
 
-# Step 3: Power management preferences
+# ==================== STEP 2: POWER MANAGEMENT ====================
 Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "  POWER MANAGEMENT SETTINGS" -ForegroundColor Cyan
+Write-Host "  STEP 2: Power Management Settings" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
 Write-Host "The eGPU manager can automatically manage power settings when your eGPU is connected.`n" -ForegroundColor Gray
 
+# Get current display timeout setting
+$currentDisplayTimeout = "Unknown"
+try {
+    $rawLine = powercfg /q SCHEME_CURRENT SUB_VIDEO VIDEOIDLE |
+               Select-String "Current AC Power Setting Index" -SimpleMatch |
+               ForEach-Object { $_.Line.Trim() } | Select-Object -First 1
+    
+    if ($rawLine -match "0x[0-9A-Fa-f]+") {
+        $hex = $Matches[0]
+        $seconds = [Convert]::ToInt32($hex, 16)
+        if ($seconds -eq 0) {
+            $currentDisplayTimeout = "Never"
+        } else {
+            $minutes = [math]::Ceiling($seconds / 60)
+            $currentDisplayTimeout = "$minutes minutes"
+        }
+    }
+} catch {
+    $currentDisplayTimeout = "Unable to detect"
+}
+
+# Get current lid close action
+$currentLidAction = "Unknown"
+try {
+    $powerNamespace = @{ Namespace = 'root\cimv2\power' }
+    $curPlan = Get-CimInstance @powerNamespace -Class Win32_PowerPlan -Filter "IsActive = TRUE"
+    $lidSetting = Get-CimInstance @powerNamespace -ClassName Win32_Powersetting -Filter "ElementName = 'Lid close action'"
+    
+    if ($curPlan -and $lidSetting) {
+        $planGuid = [Regex]::Matches($curPlan.InstanceId, "{.*}").Value
+        $lidGuid = [Regex]::Matches($lidSetting.InstanceID, "{.*}").Value
+        
+        $pluggedInLidSetting = Get-CimInstance @powerNamespace -ClassName Win32_PowerSettingDataIndex `
+            -Filter "InstanceID = 'Microsoft:PowerSettingDataIndex\\$planGuid\\AC\\$lidGuid'"
+        
+        if ($pluggedInLidSetting) {
+            $currentLidAction = switch ($pluggedInLidSetting.SettingIndexValue) {
+                0 {"Do Nothing"}
+                1 {"Sleep"}
+                2 {"Hibernate"}
+                3 {"Shut Down"}
+                default {"Unknown"}
+            }
+        }
+    }
+} catch {
+    $currentLidAction = "Unable to detect"
+}
+
 # Display sleep timeout preference
 Write-Host "Display Sleep Timeout:" -ForegroundColor Yellow
+Write-Host "Current setting: $currentDisplayTimeout (AC Power)" -ForegroundColor Cyan
+Write-Host ""
 Write-Host "When eGPU disconnected, how many minutes until display sleeps?" -ForegroundColor Gray
-Write-Host "(Current system setting will be detected, or enter 0 for 'Never', or custom minutes)" -ForegroundColor DarkGray
+Write-Host "(Enter 0 for 'Never', custom minutes, or press Enter to keep current setting)" -ForegroundColor DarkGray
 $displayTimeout = Read-Host "Minutes (press Enter to use current system setting)"
 
 $displayTimeoutValue = $null
@@ -429,19 +511,10 @@ if ($null -eq $displayTimeoutValue) {
 
 Write-Host ""
 
-# Lid close action preference (informational for now)
-Write-Host "Lid Close Action:" -ForegroundColor Yellow
-Write-Host "When eGPU is connected with external monitors:" -ForegroundColor Gray
-Write-Host "  - Lid close action will be set to 'Do Nothing' (prevents sleep)" -ForegroundColor Gray
-Write-Host "  - When eGPU disconnected, original setting will be restored" -ForegroundColor Gray
-Write-Host "  - Note: Some devices may not support this feature" -ForegroundColor DarkGray
-
-Write-Host ""
-
-Write-Host ""
-
 # Lid close action preferences
 Write-Host "Lid Close Action (AC Power):" -ForegroundColor Yellow
+Write-Host "Current setting: $currentLidAction" -ForegroundColor Cyan
+Write-Host ""
 Write-Host "What should happen when you close the lid while plugged in?" -ForegroundColor Gray
 Write-Host ""
 Write-Host "When eGPU is CONNECTED:" -ForegroundColor Cyan
@@ -453,7 +526,7 @@ Write-Host "  [0] Do Nothing" -ForegroundColor Gray
 Write-Host "  [1] Sleep (most common)" -ForegroundColor Gray
 Write-Host "  [2] Hibernate" -ForegroundColor Gray
 Write-Host "  [3] Shut Down" -ForegroundColor Gray
-Write-Host "  [Enter] Keep current system setting" -ForegroundColor DarkGray
+Write-Host "  [Enter] Keep current system setting ($currentLidAction)" -ForegroundColor DarkGray
 
 $lidActionInput = Read-Host "`nYour choice"
 $lidActionValue = $null
@@ -478,7 +551,11 @@ if ($null -eq $lidActionValue) {
     Write-Host "✓ Will use system's current setting when restoring" -ForegroundColor Green
 }
 
-# Power plan creation
+# ==================== STEP 3: POWER PLAN CREATION ====================
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  STEP 3: eGPU Performance Power Plan" -ForegroundColor Cyan
+Write-Host "========================================`n" -ForegroundColor Cyan
+
 Write-Host "eGPU High Performance Power Plan:" -ForegroundColor Yellow
 Write-Host "Create a custom power plan optimized for maximum eGPU performance?" -ForegroundColor Gray
 Write-Host "  - Based on High Performance plan" -ForegroundColor Gray
@@ -527,10 +604,16 @@ if ($createPowerPlan -like "y*") {
                 # Display: Never turn off (will be managed by script)
                 powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE 0 | Out-Null
                 
-                # Apply settings
-                powercfg -setactive $eGPUPowerPlanGuid | Out-Null
-                
-                Write-Host "✓ Created and configured eGPU High Performance power plan" -ForegroundColor Green
+                # Only activate if eGPU is currently connected and working
+                $isEGPUConnected = $selectedGPU.Status -eq "OK"
+                if ($isEGPUConnected) {
+                    powercfg -setactive $eGPUPowerPlanGuid | Out-Null
+                    Write-Host "✓ Created and activated eGPU High Performance power plan" -ForegroundColor Green
+                    Write-Host "  (eGPU is connected)" -ForegroundColor DarkGray
+                } else {
+                    Write-Host "✓ Created eGPU High Performance power plan" -ForegroundColor Green
+                    Write-Host "  (Will activate automatically when eGPU connects)" -ForegroundColor DarkGray
+                }
             } else {
                 Write-Host "✗ Failed to create power plan" -ForegroundColor Red
                 $eGPUPowerPlanGuid = $null
@@ -544,8 +627,12 @@ if ($createPowerPlan -like "y*") {
     Write-Host "✓ Skipping power plan creation" -ForegroundColor Green
 }
 
-# Step 4: Create installation directory and save files
-Write-Host "`nSetting up installation..." -ForegroundColor Yellow
+# ==================== STEP 4: INSTALLATION ====================
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  STEP 4: Finalizing Installation" -ForegroundColor Cyan
+Write-Host "========================================`n" -ForegroundColor Cyan
+
+Write-Host "Setting up installation files..." -ForegroundColor Yellow
 
 if (-not (Test-Path $installPath)) {
     New-Item -Path $installPath -ItemType Directory -Force | Out-Null
