@@ -9,6 +9,9 @@ Never manually enable your eGPU from Device Manager again! This tool monitors yo
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 ![View Count](https://komarev.com/ghpvc/?username=Bananz0&repository=eGPUae&color=brightgreen)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/bananz0/eGPUae/total)
+
+
 
 ---
 
