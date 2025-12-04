@@ -3,7 +3,7 @@
 # Designed to run at startup and handle all eGPU hot-plug scenarios
 
 # VERSION CONSTANT - Update this when releasing new versions
-$SCRIPT_VERSION = "2.2.0"
+$SCRIPT_VERSION = "2.3.0"
 
 <#
 .SYNOPSIS
@@ -56,6 +56,21 @@ $savedPowerPlan = $null
 $powerPlanManaged = $false
 $eGPUPowerPlanGuid = $null
 $originalPowerPlanGuid = $null  # Original plan from before eGPU plan was created
+
+# New feature settings (loaded from config)
+$script:preventPCSleep = $false
+$script:pcSleepTimeoutMinutes = $null
+$script:eGPUDisplayTimeoutMinutes = $null
+$script:enableNotifications = $true
+$script:trackStatistics = $false
+$script:autoLaunchApps = @()
+$script:closeLaunchersOnDisconnect = $false
+$script:enableSafeEjectHotkey = $false
+$script:preDisconnectWarning = $true
+
+# Runtime tracking
+$script:launchedApps = @()  # Track which apps we launched for closing later
+$script:connectionStartTime = $null  # Track current session start time
 # =========================
 
 # Save runtime state for crash recovery
@@ -86,7 +101,8 @@ function Save-RuntimeState {
         }
         
         $state | ConvertTo-Json | Set-Content $runtimeStatePath -ErrorAction SilentlyContinue
-    } catch {
+    }
+    catch {
         Write-Error "Failed to save runtime state: $_"
     }
 }
@@ -114,10 +130,12 @@ function Clear-RuntimeState {
         
         if ($state.Count -eq 0) {
             Remove-Item $runtimeStatePath -ErrorAction SilentlyContinue
-        } else {
+        }
+        else {
             $state | ConvertTo-Json | Set-Content $runtimeStatePath -ErrorAction SilentlyContinue
         }
-    } catch {
+    }
+    catch {
         Write-Error "Failed to clear runtime state: $_"
     }
 }
@@ -149,7 +167,8 @@ function Restore-PreviousState {
         if ($state.PSObject.Properties.Name -contains 'SavedDisplayTimeout') {
             $timeoutMinutes = if ($null -ne $script:userDisplayTimeoutMinutes) {
                 $script:userDisplayTimeoutMinutes
-            } else {
+            }
+            else {
                 [math]::Ceiling($state.SavedDisplayTimeout / 60)
             }
             
@@ -176,19 +195,21 @@ function Restore-PreviousState {
                         # Use user preference if set, otherwise use saved value
                         $restoreValue = if ($null -ne $script:userLidCloseAction) {
                             $script:userLidCloseAction
-                        } else {
+                        }
+                        else {
                             $state.SavedLidCloseAction
                         }
                         
                         $pluggedInLidSetting | Set-CimInstance -Property @{ SettingIndexValue = $restoreValue }
                         $curPlan | Invoke-CimMethod -MethodName Activate | Out-Null
                         
-                        $actionName = switch ($restoreValue) { 0 {"Do Nothing"} 1 {"Sleep"} 2 {"Hibernate"} 3 {"Shut Down"} default {"Unknown"} }
+                        $actionName = switch ($restoreValue) { 0 { "Do Nothing" } 1 { "Sleep" } 2 { "Hibernate" } 3 { "Shut Down" } default { "Unknown" } }
                         Write-Log "Restored lid close action: $actionName" "INFO"
                         $restored = $true
                     }
                 }
-            } catch {
+            }
+            catch {
                 Write-Log "Could not restore lid close action: $_" "WARNING"
             }
         }
@@ -207,7 +228,8 @@ function Restore-PreviousState {
         
         # Clear runtime state after successful restore
         Clear-RuntimeState -All
-    } catch {
+    }
+    catch {
         Write-Log "Could not restore previous state: $_" "WARNING"
     }
 }
@@ -256,7 +278,8 @@ function Write-Log {
             $savedKB = [math]::Round(($logFile.Length - (Get-Item $logPath).Length) / 1KB, 2)
             Add-Content -Path $logPath -Value "[$timestamp] [INFO] Log rotated. Saved ${savedKB}KB. Kept last $maxLogLines lines."
         }
-    } catch {
+    }
+    catch {
         Write-Error "Failed to write log: $_"
     }
 }
@@ -277,8 +300,8 @@ function Set-DisplaySleep {
 
             # Read raw line with Current AC Power Setting Index
             $rawLine = powercfg /q SCHEME_CURRENT SUB_VIDEO VIDEOIDLE |
-                       Select-String "Current AC Power Setting Index" -SimpleMatch |
-                       ForEach-Object { $_.Line.Trim() } | Select-Object -First 1
+            Select-String "Current AC Power Setting Index" -SimpleMatch |
+            ForEach-Object { $_.Line.Trim() } | Select-Object -First 1
 
             if (-not $rawLine) {
                 Write-Log "Set-DisplaySleep: Could not read current AC timeout from powercfg." "WARNING"
@@ -288,13 +311,15 @@ function Set-DisplaySleep {
             # Extract hex value (e.g. 0x00000078)
             if ($rawLine -match "0x[0-9A-Fa-f]+") {
                 $hex = $Matches[0]
-            } else {
+            }
+            else {
                 # If line contains ":" parted value like "Current AC Power Setting Index: 0x00000078"
                 $parts = $rawLine -split ":" 
                 $maybe = $parts[-1].Trim()
                 if ($maybe -match "0x[0-9A-Fa-f]+") {
                     $hex = $Matches[0]
-                } else {
+                }
+                else {
                     Write-Log "Set-DisplaySleep: Failed to parse hex timeout from: '$rawLine'." "WARNING"
                     return $false
                 }
@@ -303,7 +328,8 @@ function Set-DisplaySleep {
             # Convert hex string to integer seconds
             try {
                 $seconds = [Convert]::ToInt32($hex, 16)
-            } catch {
+            }
+            catch {
                 Write-Log "Set-DisplaySleep: Failed to convert hex '$hex' to integer: $_" "WARNING"
                 return $false
             }
@@ -319,7 +345,8 @@ function Set-DisplaySleep {
                 $script:displaySleepManaged = $true
                 Write-Log "Display sleep disabled (saved timeout: $seconds seconds)" "INFO"
                 return $true
-            } else {
+            }
+            else {
                 Write-Log "Set-DisplaySleep: AC timeout already set to 'never' (0 seconds). Not changing." "INFO"
                 $script:displaySleepManaged = $true
                 # Still mark as managed so we can restore user preference later
@@ -328,26 +355,30 @@ function Set-DisplaySleep {
                     # Set a default from user preference or use 5 minutes
                     if ($null -ne $script:userDisplayTimeoutMinutes -and $script:userDisplayTimeoutMinutes -gt 0) {
                         $script:savedDisplayTimeout = $script:userDisplayTimeoutMinutes * 60
-                    } else {
+                    }
+                    else {
                         $script:savedDisplayTimeout = 300  # 5 minutes default
                     }
                 }
                 return $true
             }
-        } else {
+        }
+        else {
             # Restore setting based on user preference or saved value
             if ($script:displaySleepManaged) {
                 # Use user preference if set, otherwise use saved value
                 if ($null -ne $script:userDisplayTimeoutMinutes) {
                     $timeoutMinutes = $script:userDisplayTimeoutMinutes
                     Write-Log "Restoring display sleep to user preference: $timeoutMinutes minutes" "INFO"
-                } elseif ($null -ne $script:savedDisplayTimeout) {
+                }
+                elseif ($null -ne $script:savedDisplayTimeout) {
                     $timeoutMinutes = [math]::Ceiling($script:savedDisplayTimeout / 60)
                     if ($script:savedDisplayTimeout -eq 0) {
                         $timeoutMinutes = 0
                     }
                     Write-Log "Restoring display sleep to saved value: $timeoutMinutes minutes (original: $($script:savedDisplayTimeout) seconds)" "INFO"
-                } else {
+                }
+                else {
                     Write-Log "Set-DisplaySleep: Nothing to restore (no saved or user preference value)." "INFO"
                     return $false
                 }
@@ -359,12 +390,14 @@ function Set-DisplaySleep {
                 Clear-RuntimeState -DisplayTimeout
                 
                 return $true
-            } else {
+            }
+            else {
                 Write-Log "Set-DisplaySleep: Nothing to restore (not previously managed or no saved value)." "INFO"
                 return $false
             }
         }
-    } catch {
+    }
+    catch {
         Write-Log "Failed to manage display sleep: $_" "WARNING"
         return $false
     }
@@ -404,7 +437,8 @@ function Set-PowerPlan {
                             if ($null -ne $script:originalPowerPlanGuid) {
                                 $script:savedPowerPlan = $script:originalPowerPlanGuid
                                 Write-Log "Will restore to original plan from config" "INFO"
-                            } else {
+                            }
+                            else {
                                 # Fallback to Balanced plan GUID
                                 $script:savedPowerPlan = "381b4222-f694-41f0-9685-ff5bb260df2e"
                                 Write-Log "Will restore to Balanced plan (default)" "INFO"
@@ -419,7 +453,8 @@ function Set-PowerPlan {
                     # Persist to config file for crash recovery
                     Save-RuntimeState -PowerPlan $script:savedPowerPlan
                 }
-            } catch {
+            }
+            catch {
                 Write-Log "Could not detect current power plan: $_" "WARNING"
                 return $false
             }
@@ -429,7 +464,8 @@ function Set-PowerPlan {
             $script:powerPlanManaged = $true
             Write-Log "Switched to eGPU High Performance power plan" "SUCCESS"
             return $true
-        } else {
+        }
+        else {
             # Restore original power plan
             if ($script:powerPlanManaged -and $null -ne $script:savedPowerPlan) {
                 powercfg -SETACTIVE $script:savedPowerPlan | Out-Null
@@ -443,7 +479,8 @@ function Set-PowerPlan {
             }
             return $false
         }
-    } catch {
+    }
+    catch {
         Write-Log "Failed to manage power plan: $_" "WARNING"
         return $false
     }
@@ -453,11 +490,12 @@ function Set-PowerPlan {
 function Test-ExternalMonitor {
     try {
         $monitors = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams | 
-                    Where-Object { $_.Active -eq $true }
+        Where-Object { $_.Active -eq $true }
         
         # More than 1 active monitor = external monitor(s) present
         return ($monitors.Count -gt 1)
-    } catch {
+    }
+    catch {
         Write-Log "Failed to check external monitors: $_" "WARNING"
         return $false
     }
@@ -514,10 +552,11 @@ function Set-LidCloseAction {
                 $curPlan | Invoke-CimMethod -MethodName Activate | Out-Null
                 
                 $script:lidCloseManaged = $true
-                $actionName = switch ($script:savedLidCloseAction) { 0 {"Do Nothing"} 1 {"Sleep"} 2 {"Hibernate"} 3 {"Shut Down"} default {"Unknown"} }
+                $actionName = switch ($script:savedLidCloseAction) { 0 { "Do Nothing" } 1 { "Sleep" } 2 { "Hibernate" } 3 { "Shut Down" } default { "Unknown" } }
                 Write-Log "Lid close action set to 'Do Nothing' (saved: $actionName)" "INFO"
                 return $true
-            } else {
+            }
+            else {
                 Write-Log "Lid close action already set to 'Do Nothing'" "INFO"
                 $script:lidCloseManaged = $true
                 # Still mark as managed so we can restore user preference later
@@ -525,13 +564,15 @@ function Set-LidCloseAction {
                 if ($null -eq $script:savedLidCloseAction -or $script:savedLidCloseAction -eq 0) {
                     if ($null -ne $script:userLidCloseAction) {
                         $script:savedLidCloseAction = $script:userLidCloseAction
-                    } else {
+                    }
+                    else {
                         $script:savedLidCloseAction = 1  # Default to Sleep
                     }
                 }
                 return $true
             }
-        } else {
+        }
+        else {
             # Restore original setting
             if ($script:lidCloseManaged -and $null -ne $script:savedLidCloseAction) {
                 $curPlan = Get-CimInstance @powerNamespace -Class Win32_PowerPlan -Filter "IsActive = TRUE"
@@ -546,14 +587,15 @@ function Set-LidCloseAction {
                 # Use user preference if set, otherwise use saved value
                 $restoreValue = if ($null -ne $script:userLidCloseAction) {
                     $script:userLidCloseAction
-                } else {
+                }
+                else {
                     $script:savedLidCloseAction
                 }
                 
                 $pluggedInLidSetting | Set-CimInstance -Property @{ SettingIndexValue = $restoreValue }
                 $curPlan | Invoke-CimMethod -MethodName Activate | Out-Null
                 
-                $actionName = switch ($restoreValue) { 0 {"Do Nothing"} 1 {"Sleep"} 2 {"Hibernate"} 3 {"Shut Down"} default {"Unknown"} }
+                $actionName = switch ($restoreValue) { 0 { "Do Nothing" } 1 { "Sleep" } 2 { "Hibernate" } 3 { "Shut Down" } default { "Unknown" } }
                 $source = if ($null -ne $script:userLidCloseAction) { "user preference" } else { "saved value" }
                 Write-Log "Lid close action restored to '$actionName' ($source)" "INFO"
                 $script:lidCloseManaged = $false
@@ -565,7 +607,8 @@ function Set-LidCloseAction {
             }
             return $false
         }
-    } catch {
+    }
+    catch {
         Write-Log "Failed to manage lid close action: $_" "WARNING"
         return $false
     }
@@ -607,7 +650,8 @@ function Show-Notification {
 
         Write-Log "Notification shown: $Title" "INFO"
         return
-    } catch {
+    }
+    catch {
         Write-Log "Toast notification failed, falling back to tray: $_" "WARNING"
     }
 
@@ -628,7 +672,8 @@ function Show-Notification {
             try {
                 $Event.MessageData.Visible = $false
                 $Event.MessageData.Dispose()
-            } catch {
+            }
+            catch {
                 Write-Error "Failed to dispose notification icon: $_"
             }
             Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
@@ -636,11 +681,12 @@ function Show-Notification {
         } -MessageData $notify
         
         # Also set a timeout cleanup in case event doesn't fire
-        $timeout = Register-ObjectEvent -InputObject ([System.Timers.Timer]@{Interval=6000;AutoReset=$false;Enabled=$true}) -EventName Elapsed -Action {
+        $timeout = Register-ObjectEvent -InputObject ([System.Timers.Timer]@{Interval = 6000; AutoReset = $false; Enabled = $true }) -EventName Elapsed -Action {
             try {
                 $Event.MessageData.Visible = $false
                 $Event.MessageData.Dispose()
-            } catch {
+            }
+            catch {
                 Write-Error "Failed to dispose notification icon on timeout: $_"
             }
             Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
@@ -650,7 +696,8 @@ function Show-Notification {
         $notify.ShowBalloonTip(5000)
 
         Write-Log "Notification shown (tray): $Title" "INFO"
-    } catch {
+    }
+    catch {
         Write-Log "Could not show notification: $_" "WARNING"
     }
 }
@@ -670,7 +717,8 @@ function Check-ForUpdate {
             if ($timeSinceCheck.TotalSeconds -lt $updateCheckInterval) {
                 $shouldCheck = $false
             }
-        } catch {
+        }
+        catch {
             $shouldCheck = $true
         }
     }
@@ -706,20 +754,23 @@ function Check-ForUpdate {
             if ($latest -gt $curr) {
                 $isNewer = $true
                 break
-            } elseif ($latest -lt $curr) {
+            }
+            elseif ($latest -lt $curr) {
                 break
             }
         }
         
         if ($isNewer) {
             Show-Notification -Title "eGPU Manager Update Available" `
-                             -Message "Version $latestVersion is available (you have $currentVersion). Run the installer to update."
+                -Message "Version $latestVersion is available (you have $currentVersion). Run the installer to update."
             
             Write-Log "Update available: v$currentVersion -> v$latestVersion" "WARNING"
-        } else {
+        }
+        else {
             Write-Log "Update check: Already on latest version (v$currentVersion)" "INFO"
         }
-    } catch {
+    }
+    catch {
         Write-Log "Update check failed (will retry in 24h): $_" "INFO"
     }
 }
@@ -727,7 +778,7 @@ function Check-ForUpdate {
 function Get-eGPUState {
     param([string]$egpu_name)
     
-    $egpu = Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
+    $egpu = Get-PnpDevice | Where-Object { $_.FriendlyName -like "*$egpu_name*" }
     
     if ($null -eq $egpu) {
         return "absent"
@@ -738,23 +789,27 @@ function Get-eGPUState {
         
         if ($egpu.Status -eq "OK") {
             return "present-ok"
-        } elseif ($egpu.Status -eq "Error") {
+        }
+        elseif ($egpu.Status -eq "Error") {
             if ($problemCode -eq 45) {
                 return "absent"
-            } else {
+            }
+            else {
                 return "present-disabled"
             }
-        } else {
+        }
+        else {
             return "absent"
         }
-    } catch {
+    }
+    catch {
         return "absent"
     }
 }
 
 function Get-eGPUDevice {
     param([string]$egpu_name)
-    return Get-PnpDevice | Where-Object {$_.FriendlyName -like "*$egpu_name*"}
+    return Get-PnpDevice | Where-Object { $_.FriendlyName -like "*$egpu_name*" }
 }
 
 function Enable-eGPU {
@@ -807,7 +862,8 @@ function Enable-eGPU {
                 Start-Sleep -Seconds 2
             }
             
-        } catch {
+        }
+        catch {
             Write-Log "ERROR on attempt $attempt : $_" "ERROR"
             if ($attempt -lt $MaxRetries) {
                 Start-Sleep -Seconds 2
@@ -816,6 +872,139 @@ function Enable-eGPU {
     }
     
     return $false
+}
+
+# ===== NEW FEATURE FUNCTIONS =====
+
+# Auto-launch configured apps when eGPU connects
+function Start-AutoLaunchApps {
+    if ($script:autoLaunchApps.Count -eq 0) {
+        return
+    }
+    
+    Write-Log "Auto-launching $($script:autoLaunchApps.Count) configured app(s)..." "INFO"
+    $script:launchedApps = @()
+    
+    foreach ($appPath in $script:autoLaunchApps) {
+        if (Test-Path $appPath) {
+            try {
+                $process = Start-Process -FilePath $appPath -PassThru -ErrorAction SilentlyContinue
+                if ($process) {
+                    $script:launchedApps += @{
+                        Path        = $appPath
+                        ProcessName = $process.ProcessName
+                        ProcessId   = $process.Id
+                    }
+                    Write-Log "  Launched: $appPath (PID: $($process.Id))" "SUCCESS"
+                }
+            }
+            catch {
+                Write-Log "  Failed to launch: $appPath - $_" "WARNING"
+            }
+        }
+        else {
+            Write-Log "  App not found: $appPath" "WARNING"
+        }
+    }
+}
+
+# Close apps that were auto-launched
+function Stop-AutoLaunchedApps {
+    if (-not $script:closeLaunchersOnDisconnect -or $script:launchedApps.Count -eq 0) {
+        return
+    }
+    
+    Write-Log "Closing $($script:launchedApps.Count) auto-launched app(s)..." "INFO"
+    
+    foreach ($app in $script:launchedApps) {
+        try {
+            # Try to close by process name (more reliable than PID for launchers that spawn child processes)
+            $processes = Get-Process -Name $app.ProcessName -ErrorAction SilentlyContinue
+            if ($processes) {
+                $processes | ForEach-Object {
+                    try {
+                        $_.CloseMainWindow() | Out-Null
+                        Start-Sleep -Milliseconds 500
+                        if (-not $_.HasExited) {
+                            $_ | Stop-Process -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                    catch { }
+                }
+                Write-Log "  Closed: $($app.ProcessName)" "SUCCESS"
+            }
+        }
+        catch {
+            Write-Log "  Failed to close: $($app.ProcessName) - $_" "WARNING"
+        }
+    }
+    
+    $script:launchedApps = @()
+}
+
+# Update connection statistics
+function Update-ConnectionStatistics {
+    param(
+        [string]$EventType  # "connect" or "disconnect"
+    )
+    
+    if (-not $script:trackStatistics) {
+        return
+    }
+    
+    try {
+        $config = Get-Content $configPath | ConvertFrom-Json
+        
+        # Initialize statistics if not present
+        if (-not $config.PSObject.Properties.Name -contains 'Statistics') {
+            $config | Add-Member -NotePropertyName 'Statistics' -NotePropertyValue @{
+                TotalConnectCount         = 0
+                TotalConnectedTimeMinutes = 0
+                LastConnected             = $null
+                LastDisconnected          = $null
+            }
+        }
+        
+        $now = Get-Date
+        
+        if ($EventType -eq "connect") {
+            $config.Statistics.TotalConnectCount++
+            $config.Statistics.LastConnected = $now.ToString("o")
+            $script:connectionStartTime = $now
+            Write-Log "Statistics: Connect #$($config.Statistics.TotalConnectCount)" "INFO"
+        }
+        elseif ($EventType -eq "disconnect") {
+            $config.Statistics.LastDisconnected = $now.ToString("o")
+            
+            # Calculate session duration if we have a start time
+            if ($null -ne $script:connectionStartTime) {
+                $sessionMinutes = [math]::Round(($now - $script:connectionStartTime).TotalMinutes, 1)
+                $config.Statistics.TotalConnectedTimeMinutes += $sessionMinutes
+                Write-Log "Statistics: Session duration $sessionMinutes minutes, Total: $($config.Statistics.TotalConnectedTimeMinutes) minutes" "INFO"
+                $script:connectionStartTime = $null
+            }
+        }
+        
+        $config | ConvertTo-Json -Depth 3 | Set-Content $configPath
+    }
+    catch {
+        Write-Log "Failed to update statistics: $_" "WARNING"
+    }
+}
+
+# Wrapper for Show-Notification that respects EnableNotifications config
+function Send-Notification {
+    param(
+        [string]$Title,
+        [string]$Message,
+        [string]$Type = "Info"
+    )
+    
+    if (-not $script:enableNotifications) {
+        return
+    }
+    
+    Show-Notification -Title $Title -Message $Message -Type $Type
 }
 
 # ===== MAIN SCRIPT START =====
@@ -840,14 +1029,14 @@ try {
     $config = Get-Content $configPath | ConvertFrom-Json
     $egpu_name = $config.eGPU_Name
     
-    # Load user preferences
+    # Load user preferences (original settings)
     if ($config.PSObject.Properties.Name -contains 'DisplayTimeoutMinutes') {
         $script:userDisplayTimeoutMinutes = $config.DisplayTimeoutMinutes
         Write-Log "Loaded display timeout preference: $($script:userDisplayTimeoutMinutes) minutes" "INFO"
     }
     if ($config.PSObject.Properties.Name -contains 'LidCloseActionAC') {
         $script:userLidCloseAction = $config.LidCloseActionAC
-        $actionName = switch ($script:userLidCloseAction) { 0 {"Do Nothing"} 1 {"Sleep"} 2 {"Hibernate"} 3 {"Shut Down"} }
+        $actionName = switch ($script:userLidCloseAction) { 0 { "Do Nothing" } 1 { "Sleep" } 2 { "Hibernate" } 3 { "Shut Down" } }
         Write-Log "Loaded lid close action preference: $actionName" "INFO"
     }
     if ($config.PSObject.Properties.Name -contains 'eGPUPowerPlanGuid') {
@@ -858,7 +1047,40 @@ try {
         $script:originalPowerPlanGuid = $config.OriginalPowerPlanGuid
         Write-Log "Loaded original power plan GUID: $($script:originalPowerPlanGuid)" "INFO"
     }
-} catch {
+    
+    # Load new feature settings
+    if ($config.PSObject.Properties.Name -contains 'PreventPCSleep') {
+        $script:preventPCSleep = $config.PreventPCSleep
+    }
+    if ($config.PSObject.Properties.Name -contains 'PCSleepTimeoutMinutes') {
+        $script:pcSleepTimeoutMinutes = $config.PCSleepTimeoutMinutes
+    }
+    if ($config.PSObject.Properties.Name -contains 'eGPUDisplayTimeoutMinutes') {
+        $script:eGPUDisplayTimeoutMinutes = $config.eGPUDisplayTimeoutMinutes
+    }
+    if ($config.PSObject.Properties.Name -contains 'EnableNotifications') {
+        $script:enableNotifications = $config.EnableNotifications
+    }
+    if ($config.PSObject.Properties.Name -contains 'TrackStatistics') {
+        $script:trackStatistics = $config.TrackStatistics
+    }
+    if ($config.PSObject.Properties.Name -contains 'AutoLaunchApps') {
+        $script:autoLaunchApps = @($config.AutoLaunchApps)
+    }
+    if ($config.PSObject.Properties.Name -contains 'CloseLaunchersOnDisconnect') {
+        $script:closeLaunchersOnDisconnect = $config.CloseLaunchersOnDisconnect
+    }
+    if ($config.PSObject.Properties.Name -contains 'EnableSafeEjectHotkey') {
+        $script:enableSafeEjectHotkey = $config.EnableSafeEjectHotkey
+    }
+    if ($config.PSObject.Properties.Name -contains 'PreDisconnectWarning') {
+        $script:preDisconnectWarning = $config.PreDisconnectWarning
+    }
+    
+    # Log loaded features
+    Write-Log "Features: Notifications=$($script:enableNotifications), Statistics=$($script:trackStatistics), AutoLaunch=$($script:autoLaunchApps.Count) apps" "INFO"
+}
+catch {
     Write-Host "ERROR: Could not read config file: $_" -ForegroundColor Red
     Write-Host "Exiting in 20 seconds..." -ForegroundColor Gray
     Start-Sleep -Seconds 20
@@ -934,7 +1156,13 @@ while ($true) {
         # Handle state transitions
         if ($script:lastKnownState -match "present" -and $currentState -eq "absent") {
             Write-Log "eGPU physically unplugged" "WARNING"
-            Show-Notification -Title "eGPU Disconnected" -Message "Your $egpu_name has been unplugged."
+            Send-Notification -Title "eGPU Disconnected" -Message "Your $egpu_name has been unplugged."
+            
+            # Update statistics
+            Update-ConnectionStatistics -EventType "disconnect"
+            
+            # Close auto-launched apps
+            Stop-AutoLaunchedApps
             
             # Restore power plan when eGPU is unplugged
             if ($script:powerPlanManaged) {
@@ -960,7 +1188,11 @@ while ($true) {
             if ($currentState -eq "present-disabled") {
                 if (Enable-eGPU -egpu_name $egpu_name) {
                     Write-Log "eGPU enabled successfully via auto-enable" "SUCCESS"
-                    Show-Notification -Title "eGPU Enabled" -Message "Your $egpu_name has been automatically enabled and is ready to use."
+                    Send-Notification -Title "eGPU Enabled" -Message "Your $egpu_name has been automatically enabled and is ready to use."
+                    
+                    # Update statistics and launch apps
+                    Update-ConnectionStatistics -EventType "connect"
+                    Start-AutoLaunchApps
                     
                     # Switch to eGPU high performance power plan
                     Set-PowerPlan -UseEGPUPlan $true
@@ -975,13 +1207,18 @@ while ($true) {
                     Set-LidCloseAction -DisableSleep $true
                     
                     $currentState = "present-ok"
-                } else {
+                }
+                else {
                     Write-Log "Failed to enable eGPU" "ERROR"
-                    Show-Notification -Title "eGPU Enable Failed" -Message "Could not automatically enable $egpu_name. Please check Device Manager."
+                    Send-Notification -Title "eGPU Enable Failed" -Message "Could not automatically enable $egpu_name. Please check Device Manager."
                 }
             }
             elseif ($currentState -eq "present-ok") {
                 Write-Log "eGPU reconnected and already enabled" "SUCCESS"
+                
+                # Update statistics and launch apps
+                Update-ConnectionStatistics -EventType "connect"
+                Start-AutoLaunchApps
                 
                 # Switch to eGPU high performance power plan
                 Set-PowerPlan -UseEGPUPlan $true
@@ -998,7 +1235,11 @@ while ($true) {
         }
         elseif ($script:lastKnownState -eq "present-ok" -and $currentState -eq "present-disabled") {
             Write-Log "eGPU disabled (safe-removed)" "WARNING"
-            Show-Notification -Title "eGPU Safe-Removed" -Message "Your $egpu_name has been safely removed. Reconnect it to auto-enable."
+            Send-Notification -Title "eGPU Safe-Removed" -Message "Your $egpu_name has been safely removed. Reconnect it to auto-enable."
+            
+            # Update statistics and close apps
+            Update-ConnectionStatistics -EventType "disconnect"
+            Stop-AutoLaunchedApps
             
             # Restore power plan when eGPU is safe-removed
             if ($script:powerPlanManaged) {
@@ -1051,7 +1292,11 @@ while ($true) {
             
             if ($enableResult) {
                 Write-Log "eGPU enabled successfully after reconnection" "SUCCESS"
-                Show-Notification -Title "eGPU Enabled" -Message "Your $egpu_name has been automatically enabled and is ready to use."
+                Send-Notification -Title "eGPU Enabled" -Message "Your $egpu_name has been automatically enabled and is ready to use."
+                
+                # Update statistics and launch apps
+                Update-ConnectionStatistics -EventType "connect"
+                Start-AutoLaunchApps
                 
                 Start-Sleep -Seconds 1
                 $currentState = Get-eGPUState -egpu_name $egpu_name
@@ -1070,12 +1315,14 @@ while ($true) {
                     
                     # Disable lid close sleep action when eGPU is connected
                     Set-LidCloseAction -DisableSleep $true
-                } else {
+                }
+                else {
                     Write-Log "Warning: Enable succeeded but state is $currentState" "WARNING"
                 }
-            } else {
+            }
+            else {
                 Write-Log "Failed to enable eGPU after multiple attempts" "ERROR"
-                Show-Notification -Title "eGPU Enable Failed" -Message "Could not automatically enable $egpu_name. Please check Device Manager."
+                Send-Notification -Title "eGPU Enable Failed" -Message "Could not automatically enable $egpu_name. Please check Device Manager."
             }
         }
     }
