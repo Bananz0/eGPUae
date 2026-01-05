@@ -22,3 +22,7 @@ desktop.ini
 # Temporary files
 *.tmp
 *.temp
+
+# Analysis and issue documentation
+agents.md
+issues.md

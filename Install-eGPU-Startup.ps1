@@ -930,76 +930,76 @@ if ($createPowerPlan -like "y*") {
             Write-Host "  Current power plan saved: $originalPowerPlanGuid" -ForegroundColor DarkGray
         }
         
-        # Check if plan already exists
+        # Check if plan already exists and delete it to create fresh
         $existingPlan = powercfg -list | Select-String "eGPU High Performance"
         if ($existingPlan) {
             # Extract GUID from existing plan
             if ($existingPlan -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
-                $eGPUPowerPlanGuid = $Matches[1]
-                Write-Host "✓ Found existing eGPU power plan" -ForegroundColor Green
+                $oldPlanGuid = $Matches[1]
+                Write-Host "  Found existing eGPU power plan, deleting to create fresh..." -ForegroundColor Yellow
+                powercfg -delete $oldPlanGuid 2>&1 | Out-Null
+            }
+        }
+        
+        # Create new plan based on High Performance
+        $result = powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1
+        if ($result -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
+            $eGPUPowerPlanGuid = $Matches[1]
+            
+            # Rename the power plan
+            powercfg -changename $eGPUPowerPlanGuid "eGPU High Performance" "Optimized for maximum eGPU performance" 2>&1 | Out-Null
+            
+            # Configure for maximum performance (some settings may not be available on all systems)
+            # CPU: 100% minimum and maximum
+            powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
+            powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
+            
+            # PCIe Link State Power Management: Off (maximum performance)
+            powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
+            
+            # USB selective suspend: Disabled
+            powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_USB USBSELECTIVESUSPEND 0 2>&1 | Out-Null
+            
+            # Hard disk: Never turn off
+            powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_DISK DISKIDLE 0 2>&1 | Out-Null
+            
+            # Display timeout: Use user's configured eGPU display timeout (OLED protection)
+            if ($null -ne $eGPUDisplayTimeoutMinutes) {
+                $displaySeconds = $eGPUDisplayTimeoutMinutes * 60
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE $displaySeconds 2>&1 | Out-Null
+            }
+            else {
+                # Default to 10 minutes if not set (safe for OLED)
+                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE 600 2>&1 | Out-Null
+            }
+            
+            # PC Sleep: Use user's configured PC sleep timeout
+            if ($preventPCSleep) {
+                if ($null -ne $pcSleepTimeoutMinutes -and $pcSleepTimeoutMinutes -gt 0) {
+                    $sleepSeconds = $pcSleepTimeoutMinutes * 60
+                    powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_SLEEP STANDBYIDLE $sleepSeconds 2>&1 | Out-Null
+                }
+                else {
+                    # Never sleep
+                    powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_SLEEP STANDBYIDLE 0 2>&1 | Out-Null
+                }
+            }
+            
+            # Only activate if eGPU is currently connected and working
+            $isEGPUConnected = $selectedGPU.Status -eq "OK"
+            if ($isEGPUConnected) {
+                powercfg -setactive $eGPUPowerPlanGuid | Out-Null
+                Write-Host "✓ Created and activated eGPU High Performance power plan" -ForegroundColor Green
+                Write-Host "  (eGPU is connected)" -ForegroundColor DarkGray
+            }
+            else {
+                Write-Host "✓ Created eGPU High Performance power plan" -ForegroundColor Green
+                Write-Host "  (Will activate automatically when eGPU connects)" -ForegroundColor DarkGray
             }
         }
         else {
-            # Create new plan based on High Performance
-            $result = powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1
-            if ($result -match "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})") {
-                $eGPUPowerPlanGuid = $Matches[1]
-                
-                # Rename the power plan
-                powercfg -changename $eGPUPowerPlanGuid "eGPU High Performance" "Optimized for maximum eGPU performance" 2>&1 | Out-Null
-                
-                # Configure for maximum performance (some settings may not be available on all systems)
-                # CPU: 100% minimum and maximum
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMIN 100 2>&1 | Out-Null
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PROCESSOR PROCTHROTTLEMAX 100 2>&1 | Out-Null
-                
-                # PCIe Link State Power Management: Off (maximum performance)
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_PCIEXPRESS ASPM 0 2>&1 | Out-Null
-                
-                # USB selective suspend: Disabled
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_USB USBSELECTIVESUSPEND 0 2>&1 | Out-Null
-                
-                # Hard disk: Never turn off
-                powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_DISK DISKIDLE 0 2>&1 | Out-Null
-                
-                # Display timeout: Use user's configured eGPU display timeout (OLED protection)
-                if ($null -ne $eGPUDisplayTimeoutMinutes) {
-                    $displaySeconds = $eGPUDisplayTimeoutMinutes * 60
-                    powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE $displaySeconds 2>&1 | Out-Null
-                }
-                else {
-                    # Default to 10 minutes if not set (safe for OLED)
-                    powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_VIDEO VIDEOIDLE 600 2>&1 | Out-Null
-                }
-                
-                # PC Sleep: Use user's configured PC sleep timeout
-                if ($preventPCSleep) {
-                    if ($null -ne $pcSleepTimeoutMinutes -and $pcSleepTimeoutMinutes -gt 0) {
-                        $sleepSeconds = $pcSleepTimeoutMinutes * 60
-                        powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_SLEEP STANDBYIDLE $sleepSeconds 2>&1 | Out-Null
-                    }
-                    else {
-                        # Never sleep
-                        powercfg -setacvalueindex $eGPUPowerPlanGuid SUB_SLEEP STANDBYIDLE 0 2>&1 | Out-Null
-                    }
-                }
-                
-                # Only activate if eGPU is currently connected and working
-                $isEGPUConnected = $selectedGPU.Status -eq "OK"
-                if ($isEGPUConnected) {
-                    powercfg -setactive $eGPUPowerPlanGuid | Out-Null
-                    Write-Host "✓ Created and activated eGPU High Performance power plan" -ForegroundColor Green
-                    Write-Host "  (eGPU is connected)" -ForegroundColor DarkGray
-                }
-                else {
-                    Write-Host "✓ Created eGPU High Performance power plan" -ForegroundColor Green
-                    Write-Host "  (Will activate automatically when eGPU connects)" -ForegroundColor DarkGray
-                }
-            }
-            else {
-                Write-Host "✗ Failed to create power plan" -ForegroundColor Red
-                $eGPUPowerPlanGuid = $null
-            }
+            Write-Host "✗ Failed to create power plan" -ForegroundColor Red
+            $eGPUPowerPlanGuid = $null
         }
     }
     catch {
